@@ -1,0 +1,3 @@
+export default function SettingsPage() {
+  return <main className="page-shell"><section className="dashboard-command"><div><span className="eyebrow">Settings</span><h1>Account settings</h1><p>Security, MFA, localization, theme, notifications, and device controls will live here.</p></div></section><section className="panel-large"><div className="settings-grid"><article><h2>Security</h2><p>MFA, recovery codes, sessions, and trusted devices.</p></article><article><h2>Localization</h2><p>Language, region, time zone, and currency display.</p></article><article><h2>Theme</h2><p>Dark and light mode support for the approved design system.</p></article></div></section></main>
+}

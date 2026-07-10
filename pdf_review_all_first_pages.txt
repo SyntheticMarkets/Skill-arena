@@ -1,0 +1,3 @@
+This file was regenerated after repository integrity repair.
+
+The previous copy contained NUL-byte corruption and could not be trusted as a source artifact.

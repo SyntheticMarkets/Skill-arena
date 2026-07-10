@@ -1,0 +1,34 @@
+# Node
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Go
+.gocache/
+**/bin/
+**/obj/
+**/*.exe
+**/*.exe~
+**/*.dll
+**/*.so
+**/*.dylib
+**/*.test
+
+# Python
+.venv/
+__pycache__
+*.py[cod]
+
+# Logs
+*.log
+
+# Environment
+.env
+
+# Skill Arena local runtime state
+backend/data/
+backend/backups/
+
+# VSCode
+.vscode/
