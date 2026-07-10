@@ -22,6 +22,7 @@ type PvPMatch struct {
 	PlayerBNonce      string             `json:"playerBNonce,omitempty"`
 	PlayerAHash       string             `json:"playerAGenerationHash,omitempty"`
 	PlayerBHash       string             `json:"playerBGenerationHash,omitempty"`
+	PuzzleMetadata    *PuzzleMetadata    `json:"puzzleMetadata,omitempty"`
 	MazeCells         []string           `json:"mazeCells,omitempty"`
 	Width             int                `json:"width,omitempty"`
 	Height            int                `json:"height,omitempty"`

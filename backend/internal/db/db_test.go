@@ -137,9 +137,13 @@ func TestFinancialFlowReconcilesLedgerWalletTreasuryAndAudit(t *testing.T) {
 	if err := store.StartGameSession(ctx, session); err != nil {
 		t.Fatalf("start live game: %v", err)
 	}
-	clicks := make([]models.MazeMove, 0, len(session.Lines))
-	for _, line := range session.Lines {
-		clicks = append(clicks, models.MazeMove{Direction: line.ID})
+	solution, ok := game.SolveLinePuzzle(session.Lines)
+	if !ok {
+		t.Fatal("generated live session puzzle is not solvable")
+	}
+	clicks := make([]models.MazeMove, 0, len(solution))
+	for _, lineID := range solution {
+		clicks = append(clicks, models.MazeMove{Direction: lineID})
 	}
 	if _, err := store.SubmitMazeMoves(ctx, player.ID, session.ID, clicks); err != nil {
 		t.Fatalf("submit winning game: %v", err)
@@ -238,9 +242,13 @@ func TestReplayCanBeRegeneratedAndVerifiedYearsLater(t *testing.T) {
 	if err := store.StartGameSession(ctx, session); err != nil {
 		t.Fatalf("start game: %v", err)
 	}
-	clicks := make([]models.MazeMove, 0, len(session.Lines))
-	for _, line := range session.Lines {
-		clicks = append(clicks, models.MazeMove{Direction: line.ID})
+	solution, ok := game.SolveLinePuzzle(session.Lines)
+	if !ok {
+		t.Fatal("generated replay puzzle is not solvable")
+	}
+	clicks := make([]models.MazeMove, 0, len(solution))
+	for _, lineID := range solution {
+		clicks = append(clicks, models.MazeMove{Direction: lineID})
 	}
 	if _, err := store.SubmitMazeMoves(ctx, user.ID, session.ID, clicks); err != nil {
 		t.Fatalf("submit game: %v", err)
@@ -613,14 +621,17 @@ func TestPvPQueueMatchesPlayersAndRefundsWhenBothRoutesInvalid(t *testing.T) {
 		t.Fatalf("player a detail leaked opponent board: playerA lines=%d playerB lines=%d seed=%q", len(playerADetail.Match.PlayerALines), len(playerADetail.Match.PlayerBLines), playerADetail.Match.PlayerBSeed)
 	}
 	internalMatch := store.pvpMatches[active.Match.ID]
-	if internalMatch.PlayerASeed == "" || internalMatch.PlayerBSeed == "" || internalMatch.PlayerASeed == internalMatch.PlayerBSeed {
-		t.Fatalf("expected distinct internal pvp seeds, got %q and %q", internalMatch.PlayerASeed, internalMatch.PlayerBSeed)
+	if internalMatch.PlayerASeed == "" || internalMatch.PlayerBSeed == "" || internalMatch.PlayerASeed != internalMatch.PlayerBSeed {
+		t.Fatalf("expected shared internal pvp seed, got %q and %q", internalMatch.PlayerASeed, internalMatch.PlayerBSeed)
 	}
-	if internalMatch.PlayerAHash == "" || internalMatch.PlayerBHash == "" || internalMatch.PlayerAHash == internalMatch.PlayerBHash {
-		t.Fatalf("expected distinct pvp generation hashes, got %q and %q", internalMatch.PlayerAHash, internalMatch.PlayerBHash)
+	if internalMatch.PlayerAHash == "" || internalMatch.PlayerBHash == "" || internalMatch.PlayerAHash != internalMatch.PlayerBHash {
+		t.Fatalf("expected shared pvp generation hash, got %q and %q", internalMatch.PlayerAHash, internalMatch.PlayerBHash)
 	}
 	if internalMatch.DifficultyProfile == nil || len(internalMatch.PlayerALines) != internalMatch.DifficultyProfile.LineCount || len(internalMatch.PlayerBLines) != internalMatch.DifficultyProfile.LineCount {
 		t.Fatal("expected pvp boards to share equivalent difficulty profile line counts")
+	}
+	if !reflect.DeepEqual(internalMatch.PlayerALines, internalMatch.PlayerBLines) {
+		t.Fatal("expected both pvp players to receive identical starting boards")
 	}
 
 	walletA, err := store.GetWalletByUserID(ctx, playerA.ID)
@@ -700,14 +711,23 @@ func TestTournamentMatchSubmissionsCompleteMatch(t *testing.T) {
 	if len(match.PlayerALines) == 0 || len(match.PlayerBLines) == 0 {
 		t.Fatal("generated tournament match is missing player line boards")
 	}
-
-	clicksA := make([]string, 0, len(match.PlayerALines))
-	for _, line := range match.PlayerALines {
-		clicksA = append(clicksA, line.ID)
+	if match.PlayerASeed == "" || match.PlayerASeed != match.PlayerBSeed {
+		t.Fatalf("expected shared tournament seed, got %q and %q", match.PlayerASeed, match.PlayerBSeed)
 	}
-	clicksB := make([]string, 0, len(match.PlayerBLines))
-	for _, line := range match.PlayerBLines {
-		clicksB = append(clicksB, line.ID)
+	if match.PlayerAHash == "" || match.PlayerAHash != match.PlayerBHash {
+		t.Fatalf("expected shared tournament generation hash, got %q and %q", match.PlayerAHash, match.PlayerBHash)
+	}
+	if !reflect.DeepEqual(match.PlayerALines, match.PlayerBLines) {
+		t.Fatal("expected both tournament players to receive identical starting boards")
+	}
+
+	clicksA, ok := game.SolveLinePuzzle(match.PlayerALines)
+	if !ok {
+		t.Fatal("generated tournament player A puzzle is not solvable")
+	}
+	clicksB, ok := game.SolveLinePuzzle(match.PlayerBLines)
+	if !ok {
+		t.Fatal("generated tournament player B puzzle is not solvable")
 	}
 	if _, err := store.SubmitTournamentMatchClicks(ctx, playerA.ID, "daily-maze-open", match.ID, clicksA); err != nil {
 		t.Fatalf("submit player a: %v", err)

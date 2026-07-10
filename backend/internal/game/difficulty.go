@@ -151,6 +151,10 @@ func GenerateLinePuzzleFromProfile(seed string, profile models.DifficultyProfile
 	return generateLinePuzzle(seed, profile)
 }
 
+func GenerateSolvedLinePuzzleFromProfile(seed string, profile models.DifficultyProfile) ([]models.ArrowLine, []string) {
+	return generateSolvedLinePuzzle(seed, profile)
+}
+
 func legacyDifficultyProfile(count int, dependencyDepth int) models.DifficultyProfile {
 	if count < 24 {
 		count = 24

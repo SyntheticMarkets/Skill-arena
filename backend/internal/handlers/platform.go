@@ -7,6 +7,7 @@ import (
 	"skill-arena/internal/config"
 	"skill-arena/internal/db"
 	"skill-arena/internal/game"
+	"skill-arena/internal/game/puzzle"
 	"skill-arena/internal/id"
 	"skill-arena/internal/models"
 )
@@ -41,10 +42,13 @@ func PlatformPuzzlePreviewHandler() http.HandlerFunc {
 		profile.DependencyTrees = 5
 		profile.FalseRouteRate = 0.22
 		version := game.CurrentPuzzleVersion()
-		derivation, err := game.DerivePuzzleSeed(config.Runtime().Security.PuzzleSecret, game.SeedDerivationInput{
+		service := puzzle.NewService(config.Runtime().Security.PuzzleSecret, nil)
+		generated, err := service.Generate(r.Context(), puzzle.Request{
+			Mode:              puzzle.ModeLandingPreview,
 			Purpose:           "landing_preview",
 			MatchID:           previewID,
 			PlayerID:          "public_preview",
+			Shared:            false,
 			DifficultyProfile: profile,
 			PuzzleVersion:     version,
 		})
@@ -52,10 +56,9 @@ func PlatformPuzzlePreviewHandler() http.HandlerFunc {
 			WriteMappedError(w, http.StatusInternalServerError, err)
 			return
 		}
-		lines := game.GenerateLinePuzzleFromProfile(derivation.Seed, profile)
-		animation, blocked, retry := previewAnimation(lines)
+		animation, blocked, retry := previewAnimation(generated.Lines, generated.Solution)
 		response := models.PuzzlePreview{
-			Lines:             lines,
+			Lines:             generated.Lines,
 			AnimationLineIDs:  animation,
 			BlockedAttemptID:  blocked,
 			UnlockedRetryID:   retry,
@@ -67,37 +70,14 @@ func PlatformPuzzlePreviewHandler() http.HandlerFunc {
 	}
 }
 
-func previewAnimation(lines []models.ArrowLine) ([]string, string, string) {
+func previewAnimation(lines []models.ArrowLine, solution []string) ([]string, string, string) {
 	if len(lines) == 0 {
 		return nil, "", ""
 	}
-	removed := map[string]bool{}
 	animation := make([]string, 0, 9)
-	blocked := ""
-	retry := ""
-	for _, line := range lines {
-		if len(line.DependsOn) == 0 {
-			animation = append(animation, line.ID)
-			removed[line.ID] = true
-			if len(animation) >= 3 {
-				break
-			}
-		}
-	}
-	for _, line := range lines {
-		if len(line.DependsOn) == 0 {
-			continue
-		}
-		for _, dependency := range line.DependsOn {
-			if !removed[dependency] {
-				blocked = line.ID
-				animation = append(animation, dependency)
-				removed[dependency] = true
-				retry = line.ID
-				break
-			}
-		}
-		if blocked != "" {
+	for _, lineID := range solution {
+		animation = append(animation, lineID)
+		if len(animation) >= 8 {
 			break
 		}
 	}
@@ -105,20 +85,18 @@ func previewAnimation(lines []models.ArrowLine) ([]string, string, string) {
 		if len(animation) >= 8 {
 			break
 		}
-		if removed[line.ID] || line.ID == blocked {
-			continue
-		}
-		ready := true
-		for _, dependency := range line.DependsOn {
-			if !removed[dependency] {
-				ready = false
-				break
-			}
-		}
-		if ready {
+		if !containsLineID(animation, line.ID) {
 			animation = append(animation, line.ID)
-			removed[line.ID] = true
 		}
 	}
-	return animation, blocked, retry
+	return animation, "", ""
+}
+
+func containsLineID(lineIDs []string, candidate string) bool {
+	for _, lineID := range lineIDs {
+		if lineID == candidate {
+			return true
+		}
+	}
+	return false
 }

@@ -49,6 +49,7 @@ type TournamentMatch struct {
 	PlayerBNonce      string             `json:"playerBNonce,omitempty"`
 	PlayerAHash       string             `json:"playerAGenerationHash,omitempty"`
 	PlayerBHash       string             `json:"playerBGenerationHash,omitempty"`
+	PuzzleMetadata    *PuzzleMetadata    `json:"puzzleMetadata,omitempty"`
 	PlayerALines      []ArrowLine        `json:"playerALines,omitempty"`
 	PlayerBLines      []ArrowLine        `json:"playerBLines,omitempty"`
 	CreatedAt         time.Time          `json:"createdAt"`

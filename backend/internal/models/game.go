@@ -20,6 +20,26 @@ type PuzzleVersion struct {
 	ReplayVersion            string `json:"replayVersion"`
 }
 
+type PuzzleMetadata struct {
+	PuzzleID                 string        `json:"puzzleId"`
+	Seed                     string        `json:"seed"`
+	GenerationHash           string        `json:"generationHash"`
+	Nonce                    string        `json:"nonce,omitempty"`
+	Mode                     string        `json:"mode"`
+	Shared                   bool          `json:"shared"`
+	Difficulty               int           `json:"difficulty"`
+	Level                    int           `json:"level"`
+	BranchCount              int           `json:"branchCount"`
+	DependencyDepth          int           `json:"dependencyDepth"`
+	MinimumMoves             int           `json:"minimumMoves"`
+	ExpectedSolveTimeSeconds int           `json:"expectedSolveTimeSeconds"`
+	ComplexityScore          int           `json:"complexityScore"`
+	TrustScore               float64       `json:"trustScore,omitempty"`
+	GeneratorVersion         string        `json:"generatorVersion"`
+	SolverVersion            string        `json:"solverVersion"`
+	PuzzleVersion            PuzzleVersion `json:"puzzleVersion"`
+}
+
 type GameSession struct {
 	ID                string             `json:"id"`
 	UserID            string             `json:"userId"`
@@ -36,6 +56,7 @@ type GameSession struct {
 	GenerationNonce   string             `json:"generationNonce,omitempty"`
 	GenerationHash    string             `json:"generationHash,omitempty"`
 	PuzzleVersion     PuzzleVersion      `json:"puzzleVersion,omitempty"`
+	PuzzleMetadata    *PuzzleMetadata    `json:"puzzleMetadata,omitempty"`
 	State             string             `json:"state,omitempty"`
 	Outcome           string             `json:"outcome,omitempty"`
 	Reward            float64            `json:"reward,omitempty"`

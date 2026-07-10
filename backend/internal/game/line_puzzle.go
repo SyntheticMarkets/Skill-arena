@@ -16,13 +16,20 @@ func GenerateLinePuzzle(seed string, count int, dependencyDepth int) []models.Ar
 }
 
 func generateLinePuzzle(seed string, profile models.DifficultyProfile) []models.ArrowLine {
+	lines, _ := generateSolvedLinePuzzle(seed, profile)
+	return lines
+}
+
+func generateSolvedLinePuzzle(seed string, profile models.DifficultyProfile) ([]models.ArrowLine, []string) {
 	for attempt := 0; attempt < 24; attempt++ {
 		candidate := generateLinePuzzleCandidate(seed+"-"+strconv.Itoa(attempt), profile)
-		if _, solvable := SolveLinePuzzle(candidate); solvable {
-			return candidate
+		if solution, solvable := SolveLinePuzzle(candidate); solvable {
+			return candidate, solution
 		}
 	}
-	return generateEscapeOnlyLinePuzzle(seed, profile)
+	fallback := generateEscapeOnlyLinePuzzle(seed, profile)
+	solution, _ := SolveLinePuzzle(fallback)
+	return fallback, solution
 }
 
 func generateLinePuzzleCandidate(seed string, profile models.DifficultyProfile) []models.ArrowLine {

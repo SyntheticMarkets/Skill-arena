@@ -21,6 +21,7 @@ import (
 	"skill-arena/internal/cache"
 	"skill-arena/internal/config"
 	"skill-arena/internal/game"
+	"skill-arena/internal/game/puzzle"
 	"skill-arena/internal/id"
 	"skill-arena/internal/matchmaking"
 	"skill-arena/internal/models"
@@ -62,6 +63,7 @@ type Store struct {
 	settings       *config.RuntimeSettings
 	pvpMatches     map[string]*models.PvPMatch
 	pvpSubmissions map[string][]*models.PvPSubmission
+	puzzleRepo     *puzzle.MemoryRepository
 	payments       map[string]*models.PaymentProviderSession
 	withdrawals    map[string]*models.WithdrawalRequest
 	amlReviews     map[string]*models.AMLReview
@@ -279,6 +281,16 @@ func isPostgresURL(value string) bool {
 	return strings.HasPrefix(lower, "postgres://") || strings.HasPrefix(lower, "postgresql://")
 }
 
+func cloneArrowLines(lines []models.ArrowLine) []models.ArrowLine {
+	copied := make([]models.ArrowLine, len(lines))
+	for i, line := range lines {
+		copied[i] = line
+		copied[i].Points = append([]models.Point(nil), line.Points...)
+		copied[i].DependsOn = append([]string(nil), line.DependsOn...)
+	}
+	return copied
+}
+
 func (s *Store) derivePuzzleSeedLocked(purpose, matchID, playerID string, profile models.DifficultyProfile, version models.PuzzleVersion) (game.SeedDerivation, error) {
 	settings := s.settings
 	if settings == nil {
@@ -291,6 +303,17 @@ func (s *Store) derivePuzzleSeedLocked(purpose, matchID, playerID string, profil
 		DifficultyProfile: profile,
 		PuzzleVersion:     version,
 	})
+}
+
+func (s *Store) puzzleServiceLocked() *puzzle.Service {
+	settings := s.settings
+	if settings == nil {
+		settings = config.Runtime()
+	}
+	if s.puzzleRepo == nil {
+		s.puzzleRepo = puzzle.NewMemoryRepository()
+	}
+	return puzzle.NewService(settings.Security.PuzzleSecret, s.puzzleRepo)
 }
 
 func (s *Store) load() error {
@@ -5159,15 +5182,31 @@ func (s *Store) StartGameSession(ctx context.Context, session *models.GameSessio
 	session.DifficultyRating = profile.Rating
 	session.DifficultyProfile = &profile
 	session.PuzzleVersion = game.CurrentPuzzleVersion()
-	derivation, err := s.derivePuzzleSeedLocked(source, session.ID, session.UserID, profile, session.PuzzleVersion)
+	generationStarted := time.Now()
+	puzzleMode := puzzle.ModePractice
+	if session.Calibration {
+		puzzleMode = puzzle.ModeTraining
+	}
+	generated, err := s.puzzleServiceLocked().Generate(ctx, puzzle.Request{
+		Mode:              puzzleMode,
+		Purpose:           source,
+		MatchID:           session.ID,
+		PlayerID:          session.UserID,
+		Shared:            false,
+		Level:             session.Difficulty,
+		DifficultyProfile: profile,
+		PuzzleVersion:     session.PuzzleVersion,
+	})
 	if err != nil {
 		return err
 	}
-	session.PuzzleSeed = derivation.Seed
-	session.GenerationNonce = derivation.Nonce
-	session.GenerationHash = derivation.GenerationHash
-	generationStarted := time.Now()
-	session.Lines = game.GenerateLinePuzzleFromProfile(session.PuzzleSeed, profile)
+	session.DifficultyProfile = &generated.DifficultyProfile
+	session.DifficultyRating = generated.DifficultyProfile.Rating
+	session.PuzzleSeed = generated.Metadata.Seed
+	session.GenerationNonce = generated.Metadata.Nonce
+	session.GenerationHash = generated.Metadata.GenerationHash
+	session.PuzzleMetadata = &generated.Metadata
+	session.Lines = generated.Lines
 	s.recordPuzzleGenerationLocked(time.Since(generationStarted))
 	session.Clicks = nil
 	if err := transitionSessionState(session, models.SessionStateReady); err != nil {
@@ -5575,23 +5614,30 @@ func (s *Store) JoinPvPQueue(ctx context.Context, userID, queueType, walletType 
 			current.DifficultyRating = profile.Rating
 			current.DifficultyProfile = &profile
 			current.PuzzleVersion = game.CurrentPuzzleVersion()
-			playerADerivation, err := s.derivePuzzleSeedLocked("pvp_player_a", current.ID, current.PlayerAID, profile, current.PuzzleVersion)
-			if err != nil {
-				return nil, err
-			}
-			playerBDerivation, err := s.derivePuzzleSeedLocked("pvp_player_b", current.ID, current.PlayerBID, profile, current.PuzzleVersion)
-			if err != nil {
-				return nil, err
-			}
-			current.PlayerASeed = playerADerivation.Seed
-			current.PlayerBSeed = playerBDerivation.Seed
-			current.PlayerANonce = playerADerivation.Nonce
-			current.PlayerBNonce = playerBDerivation.Nonce
-			current.PlayerAHash = playerADerivation.GenerationHash
-			current.PlayerBHash = playerBDerivation.GenerationHash
 			generationStarted := time.Now()
-			current.PlayerALines = game.GenerateLinePuzzleFromProfile(current.PlayerASeed, profile)
-			current.PlayerBLines = game.GenerateLinePuzzleFromProfile(current.PlayerBSeed, profile)
+			generated, err := s.puzzleServiceLocked().Generate(ctx, puzzle.Request{
+				Mode:              puzzle.ModePvP,
+				Purpose:           "pvp_match",
+				MatchID:           current.ID,
+				PlayerID:          current.PlayerAID + ":" + current.PlayerBID,
+				Shared:            true,
+				DifficultyProfile: profile,
+				PuzzleVersion:     current.PuzzleVersion,
+			})
+			if err != nil {
+				return nil, err
+			}
+			current.DifficultyProfile = &generated.DifficultyProfile
+			current.DifficultyRating = generated.DifficultyProfile.Rating
+			current.PlayerASeed = generated.Metadata.Seed
+			current.PlayerBSeed = generated.Metadata.Seed
+			current.PlayerANonce = generated.Metadata.Nonce
+			current.PlayerBNonce = generated.Metadata.Nonce
+			current.PlayerAHash = generated.Metadata.GenerationHash
+			current.PlayerBHash = generated.Metadata.GenerationHash
+			current.PuzzleMetadata = &generated.Metadata
+			current.PlayerALines = cloneArrowLines(generated.Lines)
+			current.PlayerBLines = cloneArrowLines(generated.Lines)
 			s.recordPuzzleGenerationLocked(time.Since(generationStarted))
 			s.recordMatchmakingLocked(time.Since(started))
 			if err := s.persistPvPMatches(); err != nil {
@@ -6495,23 +6541,30 @@ func (s *Store) GenerateTournamentBracket(ctx context.Context, actorID, tourname
 			match.DifficultyRating = profile.Rating
 			match.DifficultyProfile = &profile
 			match.PuzzleVersion = game.CurrentPuzzleVersion()
-			playerADerivation, err := s.derivePuzzleSeedLocked("tournament_player_a", match.ID, match.PlayerAID, profile, match.PuzzleVersion)
-			if err != nil {
-				return nil, err
-			}
-			playerBDerivation, err := s.derivePuzzleSeedLocked("tournament_player_b", match.ID, match.PlayerBID, profile, match.PuzzleVersion)
-			if err != nil {
-				return nil, err
-			}
-			match.PlayerASeed = playerADerivation.Seed
-			match.PlayerBSeed = playerBDerivation.Seed
-			match.PlayerANonce = playerADerivation.Nonce
-			match.PlayerBNonce = playerBDerivation.Nonce
-			match.PlayerAHash = playerADerivation.GenerationHash
-			match.PlayerBHash = playerBDerivation.GenerationHash
 			generationStarted := time.Now()
-			match.PlayerALines = game.GenerateLinePuzzleFromProfile(match.PlayerASeed, profile)
-			match.PlayerBLines = game.GenerateLinePuzzleFromProfile(match.PlayerBSeed, profile)
+			generated, err := s.puzzleServiceLocked().Generate(ctx, puzzle.Request{
+				Mode:              puzzle.ModeTournament,
+				Purpose:           "tournament_match",
+				MatchID:           match.ID,
+				PlayerID:          tournamentID,
+				Shared:            true,
+				DifficultyProfile: profile,
+				PuzzleVersion:     match.PuzzleVersion,
+			})
+			if err != nil {
+				return nil, err
+			}
+			match.DifficultyProfile = &generated.DifficultyProfile
+			match.DifficultyRating = generated.DifficultyProfile.Rating
+			match.PlayerASeed = generated.Metadata.Seed
+			match.PlayerBSeed = generated.Metadata.Seed
+			match.PlayerANonce = generated.Metadata.Nonce
+			match.PlayerBNonce = generated.Metadata.Nonce
+			match.PlayerAHash = generated.Metadata.GenerationHash
+			match.PlayerBHash = generated.Metadata.GenerationHash
+			match.PuzzleMetadata = &generated.Metadata
+			match.PlayerALines = cloneArrowLines(generated.Lines)
+			match.PlayerBLines = cloneArrowLines(generated.Lines)
 			s.recordPuzzleGenerationLocked(time.Since(generationStarted))
 		} else {
 			match.WinnerID = participants[i].UserID
@@ -6805,27 +6858,32 @@ func (s *Store) advanceTournamentLocked(tournament *models.Tournament, winnerID 
 			next.DifficultyRating = profile.Rating
 			next.DifficultyProfile = &profile
 			next.PuzzleVersion = game.CurrentPuzzleVersion()
-			playerADerivation, err := s.derivePuzzleSeedLocked("tournament_player_a", next.ID, next.PlayerAID, profile, next.PuzzleVersion)
-			if err != nil {
-				next.Status = "cancelled"
-				s.tMatches[tournament.ID] = append(s.tMatches[tournament.ID], next)
-				continue
-			}
-			playerBDerivation, err := s.derivePuzzleSeedLocked("tournament_player_b", next.ID, next.PlayerBID, profile, next.PuzzleVersion)
-			if err != nil {
-				next.Status = "cancelled"
-				s.tMatches[tournament.ID] = append(s.tMatches[tournament.ID], next)
-				continue
-			}
-			next.PlayerASeed = playerADerivation.Seed
-			next.PlayerBSeed = playerBDerivation.Seed
-			next.PlayerANonce = playerADerivation.Nonce
-			next.PlayerBNonce = playerBDerivation.Nonce
-			next.PlayerAHash = playerADerivation.GenerationHash
-			next.PlayerBHash = playerBDerivation.GenerationHash
 			generationStarted := time.Now()
-			next.PlayerALines = game.GenerateLinePuzzleFromProfile(next.PlayerASeed, profile)
-			next.PlayerBLines = game.GenerateLinePuzzleFromProfile(next.PlayerBSeed, profile)
+			generated, err := s.puzzleServiceLocked().Generate(context.Background(), puzzle.Request{
+				Mode:              puzzle.ModeTournament,
+				Purpose:           "tournament_match",
+				MatchID:           next.ID,
+				PlayerID:          tournament.ID,
+				Shared:            true,
+				DifficultyProfile: profile,
+				PuzzleVersion:     next.PuzzleVersion,
+			})
+			if err != nil {
+				next.Status = "cancelled"
+				s.tMatches[tournament.ID] = append(s.tMatches[tournament.ID], next)
+				continue
+			}
+			next.DifficultyProfile = &generated.DifficultyProfile
+			next.DifficultyRating = generated.DifficultyProfile.Rating
+			next.PlayerASeed = generated.Metadata.Seed
+			next.PlayerBSeed = generated.Metadata.Seed
+			next.PlayerANonce = generated.Metadata.Nonce
+			next.PlayerBNonce = generated.Metadata.Nonce
+			next.PlayerAHash = generated.Metadata.GenerationHash
+			next.PlayerBHash = generated.Metadata.GenerationHash
+			next.PuzzleMetadata = &generated.Metadata
+			next.PlayerALines = cloneArrowLines(generated.Lines)
+			next.PlayerBLines = cloneArrowLines(generated.Lines)
 			s.recordPuzzleGenerationLocked(time.Since(generationStarted))
 		} else {
 			next.WinnerID = winners[i]
