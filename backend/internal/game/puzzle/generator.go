@@ -32,7 +32,6 @@ func (s *Service) Generate(ctx context.Context, req Request) (Puzzle, error) {
 	if req.DifficultyProfile.LineCount == 0 {
 		req.DifficultyProfile = game.ProfileFromRating(10, req.Purpose)
 	}
-	req.DifficultyProfile = normalizeProfile(req)
 
 	derivation, err := DeriveSeed(ctx, s.secret, req)
 	if err != nil {

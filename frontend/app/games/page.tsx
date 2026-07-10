@@ -128,15 +128,18 @@ export default function GamesPage() {
     setLines((current) => {
       const blocker = escapeBlocker(current, lineId)
       return current.map((line) => {
-        if (line.id !== lineId || line.state === 'removed') return line
+        if (line.id !== lineId || line.state === 'removed' || line.state === 'blocked' || line.state === 'exiting') return line
         setClickedLineIds((clicks) => [...clicks, lineId])
         if (blocker) {
           window.setTimeout(() => {
             setLines((latest) => latest.map((item) => item.id === lineId && item.state === 'blocked' ? { ...item, state: 'ready' } : item))
-          }, 3000)
+          }, 760)
           return { ...line, state: 'blocked' }
         }
-        return { ...line, state: 'removed' }
+        window.setTimeout(() => {
+          setLines((latest) => latest.map((item) => item.id === lineId && item.state === 'exiting' ? { ...item, state: 'removed' } : item))
+        }, 620)
+        return { ...line, state: 'exiting' }
       })
     })
   }

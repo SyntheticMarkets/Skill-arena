@@ -223,6 +223,7 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 		settings:       config.Runtime(),
 		pvpMatches:     map[string]*models.PvPMatch{},
 		pvpSubmissions: map[string][]*models.PvPSubmission{},
+		puzzleRepo:     puzzle.NewMemoryRepository(),
 		payments:       map[string]*models.PaymentProviderSession{},
 		withdrawals:    map[string]*models.WithdrawalRequest{},
 		amlReviews:     map[string]*models.AMLReview{},
@@ -5085,14 +5086,15 @@ func (s *Store) ListBaselines(ctx context.Context) ([]*models.BehavioralBaseline
 
 func (s *Store) StartGameSession(ctx context.Context, session *models.GameSession) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	wallet, ok := s.wallets[session.UserID]
 	if !ok {
+		s.mu.Unlock()
 		return errors.New("wallet not found")
 	}
 
 	if session.Stake <= 0 && !session.Calibration {
+		s.mu.Unlock()
 		return errors.New("stake must be greater than zero")
 	}
 
@@ -5101,6 +5103,7 @@ func (s *Store) StartGameSession(ctx context.Context, session *models.GameSessio
 	session.IsFinished = false
 	session.State = models.SessionStateCreated
 	if err := transitionSessionState(session, models.SessionStateGenerating); err != nil {
+		s.mu.Unlock()
 		return err
 	}
 	if session.Mode == "" {
@@ -5115,6 +5118,7 @@ func (s *Store) StartGameSession(ctx context.Context, session *models.GameSessio
 		case "demo":
 			availableDemo := calculateAvailableDemo(wallet)
 			if availableDemo < session.Stake {
+				s.mu.Unlock()
 				return errors.New("insufficient available demo balance")
 			}
 			entry := &models.LedgerEntry{
@@ -5134,6 +5138,7 @@ func (s *Store) StartGameSession(ctx context.Context, session *models.GameSessio
 		case "live":
 			availableLive := calculateAvailableLive(wallet)
 			if availableLive < session.Stake {
+				s.mu.Unlock()
 				return errors.New("insufficient available live balance")
 			}
 			entry := &models.LedgerEntry{
@@ -5151,6 +5156,7 @@ func (s *Store) StartGameSession(ctx context.Context, session *models.GameSessio
 			entry.BalanceAfter = calculateAvailableLive(wallet)
 			s.ledger[session.UserID] = append(s.ledger[session.UserID], entry)
 		default:
+			s.mu.Unlock()
 			return errors.New("invalid game type")
 		}
 	}
@@ -5182,12 +5188,16 @@ func (s *Store) StartGameSession(ctx context.Context, session *models.GameSessio
 	session.DifficultyRating = profile.Rating
 	session.DifficultyProfile = &profile
 	session.PuzzleVersion = game.CurrentPuzzleVersion()
-	generationStarted := time.Now()
 	puzzleMode := puzzle.ModePractice
 	if session.Calibration {
 		puzzleMode = puzzle.ModeTraining
 	}
-	generated, err := s.puzzleServiceLocked().Generate(ctx, puzzle.Request{
+	service := s.puzzleServiceLocked()
+	s.sessions[session.ID] = session
+	s.mu.Unlock()
+
+	generationStarted := time.Now()
+	generated, err := service.Generate(ctx, puzzle.Request{
 		Mode:              puzzleMode,
 		Purpose:           source,
 		MatchID:           session.ID,
@@ -5199,6 +5209,13 @@ func (s *Store) StartGameSession(ctx context.Context, session *models.GameSessio
 	})
 	if err != nil {
 		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.sessions[session.ID]
+	if ok && existing.State != models.SessionStateGenerating {
+		return errors.New("game session state changed during puzzle generation")
 	}
 	session.DifficultyProfile = &generated.DifficultyProfile
 	session.DifficultyRating = generated.DifficultyProfile.Rating
@@ -5576,7 +5593,6 @@ func (s *Store) JoinPvPQueue(ctx context.Context, userID, queueType, walletType 
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	matcher.ExpireStale(s.pvpMatches, time.Now().UTC())
 	if match := matcher.ActiveOrWaitingForUser(s.pvpMatches, userID); match != nil {
@@ -5585,7 +5601,9 @@ func (s *Store) JoinPvPQueue(ctx context.Context, userID, queueType, walletType 
 		_ = s.persistWallets()
 		_ = s.persistLedger()
 		_ = s.persistMetrics()
-		return s.pvpDetailLocked(match, userID), nil
+		detail := s.pvpDetailLocked(match, userID)
+		s.mu.Unlock()
+		return detail, nil
 	}
 
 	if waitingMatch != nil {
@@ -5598,6 +5616,7 @@ func (s *Store) JoinPvPQueue(ctx context.Context, userID, queueType, walletType 
 				_ = s.persistWallets()
 				_ = s.persistLedger()
 				_ = s.persistPvPMatches()
+				s.mu.Unlock()
 				return nil, errors.New("self-match prevented")
 			}
 			current.PlatformFee = current.Stake * 2 * 0.1
@@ -5614,8 +5633,8 @@ func (s *Store) JoinPvPQueue(ctx context.Context, userID, queueType, walletType 
 			current.DifficultyRating = profile.Rating
 			current.DifficultyProfile = &profile
 			current.PuzzleVersion = game.CurrentPuzzleVersion()
-			generationStarted := time.Now()
-			generated, err := s.puzzleServiceLocked().Generate(ctx, puzzle.Request{
+			service := s.puzzleServiceLocked()
+			puzzleRequest := puzzle.Request{
 				Mode:              puzzle.ModePvP,
 				Purpose:           "pvp_match",
 				MatchID:           current.ID,
@@ -5623,9 +5642,19 @@ func (s *Store) JoinPvPQueue(ctx context.Context, userID, queueType, walletType 
 				Shared:            true,
 				DifficultyProfile: profile,
 				PuzzleVersion:     current.PuzzleVersion,
-			})
+			}
+			s.mu.Unlock()
+
+			generationStarted := time.Now()
+			generated, err := service.Generate(ctx, puzzleRequest)
 			if err != nil {
 				return nil, err
+			}
+			s.mu.Lock()
+			current, ok = s.pvpMatches[waitingMatch.ID]
+			if !ok || current.Status != "active" {
+				s.mu.Unlock()
+				return nil, errors.New("pvp match changed during puzzle generation")
 			}
 			current.DifficultyProfile = &generated.DifficultyProfile
 			current.DifficultyRating = generated.DifficultyProfile.Rating
@@ -5641,10 +5670,13 @@ func (s *Store) JoinPvPQueue(ctx context.Context, userID, queueType, walletType 
 			s.recordPuzzleGenerationLocked(time.Since(generationStarted))
 			s.recordMatchmakingLocked(time.Since(started))
 			if err := s.persistPvPMatches(); err != nil {
+				s.mu.Unlock()
 				return nil, err
 			}
 			_ = s.persistMetrics()
-			return s.pvpDetailLocked(current, userID), nil
+			detail := s.pvpDetailLocked(current, userID)
+			s.mu.Unlock()
+			return detail, nil
 		}
 	}
 
@@ -5660,10 +5692,13 @@ func (s *Store) JoinPvPQueue(ctx context.Context, userID, queueType, walletType 
 	s.pvpMatches[match.ID] = match
 	s.recordMatchmakingLocked(time.Since(started))
 	if err := s.persistPvPMatches(); err != nil {
+		s.mu.Unlock()
 		return nil, err
 	}
 	_ = s.persistMetrics()
-	return s.pvpDetailLocked(match, userID), nil
+	detail := s.pvpDetailLocked(match, userID)
+	s.mu.Unlock()
+	return detail, nil
 }
 
 func (s *Store) ListPvPMatchesByUserID(ctx context.Context, userID string) ([]*models.PvPMatchDetail, error) {
@@ -6506,24 +6541,33 @@ func (s *Store) RegisterTournament(ctx context.Context, userID, tournamentID str
 
 func (s *Store) GenerateTournamentBracket(ctx context.Context, actorID, tournamentID string) ([]*models.TournamentMatch, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	tournament, ok := s.tournaments[tournamentID]
 	if !ok {
+		s.mu.Unlock()
 		return nil, errors.New("tournament not found")
 	}
 	if len(s.tMatches[tournamentID]) > 0 {
+		s.mu.Unlock()
 		return nil, errors.New("bracket already generated")
 	}
 	participants := append([]*models.TournamentParticipant(nil), s.participants[tournamentID]...)
 	if len(participants) < 2 {
+		s.mu.Unlock()
 		return nil, errors.New("at least two participants are required")
 	}
 	sort.SliceStable(participants, func(i, j int) bool {
 		return participants[i].Seed < participants[j].Seed
 	})
 
+	type pendingTournamentPuzzle struct {
+		match   *models.TournamentMatch
+		request puzzle.Request
+		result  puzzle.Puzzle
+		elapsed time.Duration
+	}
 	matches := make([]*models.TournamentMatch, 0)
+	pending := make([]pendingTournamentPuzzle, 0)
 	now := time.Now().UTC()
 	for i := 0; i < len(participants); i += 2 {
 		match := &models.TournamentMatch{
@@ -6541,37 +6585,60 @@ func (s *Store) GenerateTournamentBracket(ctx context.Context, actorID, tourname
 			match.DifficultyRating = profile.Rating
 			match.DifficultyProfile = &profile
 			match.PuzzleVersion = game.CurrentPuzzleVersion()
-			generationStarted := time.Now()
-			generated, err := s.puzzleServiceLocked().Generate(ctx, puzzle.Request{
-				Mode:              puzzle.ModeTournament,
-				Purpose:           "tournament_match",
-				MatchID:           match.ID,
-				PlayerID:          tournamentID,
-				Shared:            true,
-				DifficultyProfile: profile,
-				PuzzleVersion:     match.PuzzleVersion,
+			pending = append(pending, pendingTournamentPuzzle{
+				match: match,
+				request: puzzle.Request{
+					Mode:              puzzle.ModeTournament,
+					Purpose:           "tournament_match",
+					MatchID:           match.ID,
+					PlayerID:          tournamentID,
+					Shared:            true,
+					DifficultyProfile: profile,
+					PuzzleVersion:     match.PuzzleVersion,
+				},
 			})
-			if err != nil {
-				return nil, err
-			}
-			match.DifficultyProfile = &generated.DifficultyProfile
-			match.DifficultyRating = generated.DifficultyProfile.Rating
-			match.PlayerASeed = generated.Metadata.Seed
-			match.PlayerBSeed = generated.Metadata.Seed
-			match.PlayerANonce = generated.Metadata.Nonce
-			match.PlayerBNonce = generated.Metadata.Nonce
-			match.PlayerAHash = generated.Metadata.GenerationHash
-			match.PlayerBHash = generated.Metadata.GenerationHash
-			match.PuzzleMetadata = &generated.Metadata
-			match.PlayerALines = cloneArrowLines(generated.Lines)
-			match.PlayerBLines = cloneArrowLines(generated.Lines)
-			s.recordPuzzleGenerationLocked(time.Since(generationStarted))
 		} else {
 			match.WinnerID = participants[i].UserID
 			match.Status = "completed"
 			match.CompletedAt = &now
 		}
 		matches = append(matches, match)
+	}
+	service := s.puzzleServiceLocked()
+	s.mu.Unlock()
+
+	for i := range pending {
+		generationStarted := time.Now()
+		generated, err := service.Generate(ctx, pending[i].request)
+		if err != nil {
+			return nil, err
+		}
+		pending[i].result = generated
+		pending[i].elapsed = time.Since(generationStarted)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.tMatches[tournamentID]) > 0 {
+		return nil, errors.New("bracket already generated")
+	}
+	for _, item := range pending {
+		item.match.DifficultyProfile = &item.result.DifficultyProfile
+		item.match.DifficultyRating = item.result.DifficultyProfile.Rating
+		item.match.PlayerASeed = item.result.Metadata.Seed
+		item.match.PlayerBSeed = item.result.Metadata.Seed
+		item.match.PlayerANonce = item.result.Metadata.Nonce
+		item.match.PlayerBNonce = item.result.Metadata.Nonce
+		item.match.PlayerAHash = item.result.Metadata.GenerationHash
+		item.match.PlayerBHash = item.result.Metadata.GenerationHash
+		item.match.PuzzleMetadata = &item.result.Metadata
+		item.match.PlayerALines = cloneArrowLines(item.result.Lines)
+		item.match.PlayerBLines = cloneArrowLines(item.result.Lines)
+		s.recordPuzzleGenerationLocked(item.elapsed)
+	}
+	tournament, ok = s.tournaments[tournamentID]
+	if !ok {
+		return nil, errors.New("tournament not found")
 	}
 	tournament.Status = "active"
 	s.tMatches[tournamentID] = matches

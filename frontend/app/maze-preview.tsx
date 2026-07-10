@@ -2,7 +2,7 @@
 
 import { KeyboardEvent, PointerEvent, WheelEvent, useId, useMemo, useRef, useState } from 'react'
 
-export type LineState = 'ready' | 'removed' | 'blocked'
+export type LineState = 'ready' | 'removed' | 'blocked' | 'exiting'
 export type Direction = 'up' | 'down' | 'left' | 'right'
 
 export type ArrowLine = {
@@ -66,8 +66,20 @@ function roundedPath(points: Array<{ x: number; y: number }>) {
 }
 
 function lineColor(index: number) {
-  const colors = ['#19d3ff', '#8b5cf6', '#22c55e', '#facc15', '#f43f8b', '#f8fafc']
+  const colors = ['#23d3ff', '#7c5cff', '#25d87b', '#f6c453', '#ff4f9a', '#f8fafc']
   return colors[index % colors.length]
+}
+
+function motionStyle(line: ArrowLine, index: number) {
+  const [dirX, dirY] = directionVector(line.direction)
+  return {
+    animationDelay: `${index * 70}ms`,
+    ['--line-color' as string]: lineColor(index),
+    ['--move-x' as string]: `${dirX * 128}px`,
+    ['--move-y' as string]: `${dirY * 128}px`,
+    ['--block-x' as string]: `${dirX * 10}px`,
+    ['--block-y' as string]: `${dirY * 10}px`,
+  }
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -281,8 +293,15 @@ export function ArrowLinePuzzle({
       onDoubleClick={resetCamera}
     >
       <defs>
-        <marker id={`${markerId}-arrow`} markerWidth="3.4" markerHeight="3.4" refX="3.1" refY="1.7" orient="auto" markerUnits="userSpaceOnUse">
-          <path d="M0,0 L3.4,1.7 L0,3.4 L0.8,1.7 Z" fill="currentColor" />
+        <filter id={`${markerId}-glow`} x="-40%" y="-40%" width="180%" height="180%">
+          <feGaussianBlur stdDeviation="1.2" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <marker id={`${markerId}-arrow`} markerWidth="4.6" markerHeight="4.6" refX="4.1" refY="2.3" orient="auto" markerUnits="userSpaceOnUse">
+          <path className="line-arrowhead" d="M0.15,0.2 L4.35,2.3 L0.15,4.4 C0.95,3.15 1.12,1.45 0.15,0.2 Z" fill="currentColor" />
         </marker>
       </defs>
       {lines.map((line, index) => {
@@ -296,10 +315,12 @@ export function ArrowLinePuzzle({
             onKeyDown={readOnly ? undefined : (event) => lineKeyDown(event, line.id)}
             tabIndex={readOnly ? undefined : 0}
             role={readOnly ? undefined : 'button'}
-            style={{ animationDelay: `${index * 70}ms`, ['--line-color' as string]: lineColor(index) }}
+            style={motionStyle(line, index)}
           >
             <path className="line-hitbox" d={path} />
-            <path className="line-route" d={path} markerEnd={`url(#${markerId}-arrow)`} />
+            <path className="line-shadow" d={path} />
+            <path className="line-route" d={path} markerEnd={`url(#${markerId}-arrow)`} filter={`url(#${markerId}-glow)`} />
+            <path className="line-highlight" d={path} />
           </g>
         )
       })}

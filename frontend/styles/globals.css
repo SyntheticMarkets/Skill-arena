@@ -445,6 +445,9 @@ button.entry-button {
 .arrow-line {
   color: var(--line-color);
   outline: none;
+  transform-box: fill-box;
+  transform-origin: center;
+  will-change: transform, opacity;
 }
 
 .line-hitbox {
@@ -454,30 +457,72 @@ button.entry-button {
   stroke-width: 8;
 }
 
-.line-route {
+.line-shadow,
+.line-route,
+.line-highlight {
   fill: none;
-  stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 1.2;
-  filter: drop-shadow(0 0 5px currentColor);
-  transition: opacity 220ms ease, stroke 180ms ease, transform 180ms ease;
+  pointer-events: none;
+}
+
+.line-shadow {
+  stroke: rgba(2, 6, 14, 0.62);
+  stroke-width: 2.65;
+  transform: translate(0.45px, 0.65px);
+}
+
+.line-route {
+  stroke: currentColor;
+  stroke-width: 1.75;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, currentColor 70%, transparent));
+  transition: opacity 180ms ease, stroke 180ms ease, transform 180ms ease;
+}
+
+.line-highlight {
+  stroke: rgba(255, 255, 255, 0.52);
+  stroke-width: 0.46;
+  stroke-dasharray: 5 4;
+  opacity: 0.82;
+}
+
+.line-arrowhead {
+  filter: drop-shadow(0 0 4px currentColor) drop-shadow(0 1px 1px rgba(0, 0, 0, 0.38));
 }
 
 .arrow-line.ready {
   cursor: pointer;
 }
 
-.arrow-line.blocked .line-route {
-  stroke: #ef4444;
-  animation: blocked-bounce 460ms ease;
+.arrow-line.blocked {
+  animation: blocked-impact 760ms cubic-bezier(.2, .82, .24, 1) both;
 }
 
-.arrow-line.removed .line-route {
+.arrow-line.blocked .line-route,
+.arrow-line.blocked .line-highlight {
+  stroke: #ef4444;
+}
+
+.arrow-line.exiting {
+  pointer-events: none;
+  animation: arrow-exit 620ms cubic-bezier(.18, .78, .22, 1) forwards;
+}
+
+.arrow-line.exiting .line-route,
+.arrow-line.exiting .line-highlight,
+.arrow-line.exiting .line-shadow,
+.arrow-line.removed .line-route,
+.arrow-line.removed .line-highlight,
+.arrow-line.removed .line-shadow {
   opacity: 0;
 }
 
-.line-puzzle.animated .arrow-line .line-route {
+.line-puzzle.animated .arrow-line {
+  animation: ambient-slide 6200ms ease-in-out infinite;
+}
+
+.line-puzzle.animated .arrow-line .line-route,
+.line-puzzle.animated .arrow-line .line-highlight {
   stroke-dasharray: 100;
   stroke-dashoffset: 100;
   animation: line-draw 1400ms ease forwards;
@@ -531,16 +576,49 @@ button.entry-button {
   }
 }
 
-@keyframes blocked-bounce {
-  0%,
-  100% {
+@keyframes blocked-impact {
+  0% {
     transform: translateX(0);
   }
-  35% {
-    transform: translateX(-1.2px);
+  38% {
+    transform: translate(var(--block-x), var(--block-y));
   }
-  70% {
-    transform: translateX(1.2px);
+  48% {
+    transform: translate(calc(var(--block-x) * .82), calc(var(--block-y) * .82)) rotate(.8deg);
+  }
+  58% {
+    transform: translate(calc(var(--block-x) * .72), calc(var(--block-y) * .72)) rotate(-.8deg);
+  }
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+@keyframes arrow-exit {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  18% {
+    transform: translate(calc(var(--move-x) * .08), calc(var(--move-y) * .08)) scale(1.025);
+  }
+  74% {
+    opacity: 1;
+    transform: translate(calc(var(--move-x) * .78), calc(var(--move-y) * .78)) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--move-x), var(--move-y)) scale(.98);
+  }
+}
+
+@keyframes ambient-slide {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  48% {
+    transform: translate(calc(var(--block-x) * .35), calc(var(--block-y) * .35));
   }
 }
 

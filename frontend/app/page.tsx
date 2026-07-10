@@ -160,7 +160,7 @@ export default function Home() {
     if (puzzleState === 'solved') return
 
     const line = puzzleLines.find((item) => item.id === lineId)
-    if (!line) return
+    if (!line || line.state === 'blocked' || line.state === 'exiting' || line.state === 'removed') return
     const blocker = escapeBlocker(puzzleLines.map((item) => clearedIds.has(item.id) ? { ...item, state: 'removed' } : item), lineId)
     if (blocker) {
       setPuzzleState('blocked')
@@ -169,14 +169,17 @@ export default function Home() {
       window.setTimeout(() => {
         setPuzzleLines((current) => current.map((item) => item.id === lineId ? { ...item, state: 'ready' } : item))
         setPuzzleState('playing')
-      }, 520)
+      }, 760)
       return
     }
 
     const nextCleared = new Set(clearedIds)
     nextCleared.add(lineId)
     setClearedIds(nextCleared)
-    setPuzzleLines((current) => current.map((item) => item.id === lineId ? { ...item, state: 'removed' } : item))
+    setPuzzleLines((current) => current.map((item) => item.id === lineId ? { ...item, state: 'exiting' } : item))
+    window.setTimeout(() => {
+      setPuzzleLines((current) => current.map((item) => item.id === lineId ? { ...item, state: 'removed' } : item))
+    }, 620)
     if (nextCleared.size === puzzleLines.length) {
       setPuzzleState('solved')
     }
