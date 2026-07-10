@@ -51,7 +51,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
   const isMarketing = pathname === '/'
-  const [checkedAuth, setCheckedAuth] = useState(!isMarketing)
+  const [checkedAuth, setCheckedAuth] = useState(true)
   const [role, setRole] = useState('')
   const isAdmin = roleRank(role) >= roleRank('admin')
 
@@ -73,9 +73,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setCheckedAuth(true)
   }, [isMarketing, router])
 
-  if (isMarketing) {
-    return checkedAuth ? <>{children}</> : <main className="marketing-loading" aria-label={t.loading} />
-  }
+  if (isMarketing) return <>{children}</>
 
   return (
     <div className="arena-shell">

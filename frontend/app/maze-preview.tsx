@@ -1,6 +1,6 @@
 'use client'
 
-import { PointerEvent, WheelEvent, useId, useMemo, useRef, useState } from 'react'
+import { KeyboardEvent, PointerEvent, WheelEvent, useId, useMemo, useRef, useState } from 'react'
 
 export type LineState = 'ready' | 'removed' | 'blocked'
 export type Direction = 'up' | 'down' | 'left' | 'right'
@@ -136,6 +136,13 @@ export function ArrowLinePuzzle({
     }
   }
 
+  function lineKeyDown(event: KeyboardEvent<SVGGElement>, lineId: string) {
+    if (readOnly) return
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    onLineClick?.(lineId)
+  }
+
   return (
     <svg
       className={`${compact ? 'line-puzzle landing-line-puzzle' : 'line-puzzle'}${animated ? ' animated' : ''}`}
@@ -150,8 +157,8 @@ export function ArrowLinePuzzle({
       onDoubleClick={resetCamera}
     >
       <defs>
-        <marker id={`${markerId}-arrow`} markerWidth="6" markerHeight="6" refX="5.2" refY="3" orient="auto" markerUnits="strokeWidth">
-          <path d="M0,0 L6,3 L0,6 L1.4,3 Z" fill="context-stroke" />
+        <marker id={`${markerId}-arrow`} markerWidth="3.4" markerHeight="3.4" refX="3.1" refY="1.7" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M0,0 L3.4,1.7 L0,3.4 L0.8,1.7 Z" fill="currentColor" />
         </marker>
       </defs>
       {lines.map((line, index) => {
@@ -162,6 +169,7 @@ export function ArrowLinePuzzle({
             key={line.id}
             className={`arrow-line ${state}`}
             onClick={readOnly ? undefined : () => onLineClick?.(line.id)}
+            onKeyDown={readOnly ? undefined : (event) => lineKeyDown(event, line.id)}
             tabIndex={readOnly ? undefined : 0}
             role={readOnly ? undefined : 'button'}
             style={{ animationDelay: `${index * 70}ms`, ['--line-color' as string]: lineColor(index) }}
