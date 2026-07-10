@@ -30,5 +30,8 @@ __pycache__
 backend/data/
 backend/backups/
 
+# Extracted reference app checkout; the zip remains versioned.
+sample app/stray-arrows/
+
 # VSCode
 .vscode/
