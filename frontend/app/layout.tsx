@@ -5,6 +5,9 @@ import { AppShell } from './app-shell'
 export const metadata: Metadata = {
   title: 'Skill Arena',
   description: 'Competitive human skill platform',
+  icons: {
+    icon: '/favicon.svg',
+  },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
