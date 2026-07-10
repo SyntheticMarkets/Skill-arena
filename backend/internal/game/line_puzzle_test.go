@@ -6,13 +6,21 @@ import (
 	"skill-arena/internal/models"
 )
 
-func TestValidateLineClicksRequiresDependenciesBeforeRemoval(t *testing.T) {
+func TestValidateLineClicksUsesPhysicalEscapePath(t *testing.T) {
 	lines := []models.ArrowLine{
-		{ID: "line-1", Direction: "right", X: 10, Y: 10, Length: 8},
-		{ID: "line-2", Direction: "down", X: 20, Y: 20, Length: 8, DependsOn: []string{"line-1"}},
+		{
+			ID:        "blocker",
+			Direction: "up",
+			Points:    []models.Point{{X: 30, Y: 30}, {X: 30, Y: 20}},
+		},
+		{
+			ID:        "blocked",
+			Direction: "right",
+			Points:    []models.Point{{X: 10, Y: 20}, {X: 20, Y: 20}},
+		},
 	}
 
-	complete, state, clicks := ValidateLineClicks(lines, []string{"line-2"})
+	complete, state, clicks := ValidateLineClicks(lines, []string{"blocked"})
 	if complete {
 		t.Fatal("blocked click completed puzzle")
 	}
@@ -20,12 +28,12 @@ func TestValidateLineClicksRequiresDependenciesBeforeRemoval(t *testing.T) {
 		t.Fatalf("blocked click = %#v, want failed click with reason", clicks)
 	}
 	if state[1].Removed {
-		t.Fatal("blocked dependent line was removed")
+		t.Fatal("blocked line was removed")
 	}
 
-	complete, state, clicks = ValidateLineClicks(lines, []string{"line-1", "line-2"})
+	complete, state, clicks = ValidateLineClicks(lines, []string{"blocker", "blocked"})
 	if !complete {
-		t.Fatal("ordered dependency clicks did not complete puzzle")
+		t.Fatal("clearing physical blocker first did not complete puzzle")
 	}
 	if len(clicks) != 2 || !clicks[0].Success || !clicks[1].Success {
 		t.Fatalf("ordered clicks = %#v, want two successes", clicks)
@@ -35,23 +43,72 @@ func TestValidateLineClicksRequiresDependenciesBeforeRemoval(t *testing.T) {
 	}
 }
 
-func TestGenerateLinePuzzleIsSolvableInGeneratedOrder(t *testing.T) {
+func TestValidateLineClicksDoesNotUseOppositeDirectionToEscape(t *testing.T) {
+	lines := []models.ArrowLine{
+		{
+			ID:        "left-blocker",
+			Direction: "up",
+			Points:    []models.Point{{X: 10, Y: 30}, {X: 10, Y: 20}},
+		},
+		{
+			ID:        "right-blocker",
+			Direction: "up",
+			Points:    []models.Point{{X: 30, Y: 30}, {X: 30, Y: 20}},
+		},
+		{
+			ID:        "arrow",
+			Direction: "right",
+			Points:    []models.Point{{X: 12, Y: 20}, {X: 20, Y: 20}},
+		},
+	}
+
+	_, state, clicks := ValidateLineClicks(lines, []string{"arrow"})
+	if len(clicks) != 1 || clicks[0].Success {
+		t.Fatalf("click = %#v, want blocked by right-side blocker", clicks)
+	}
+	if state[2].Removed {
+		t.Fatal("arrow escaped by using the opposite direction")
+	}
+	if clicks[0].FailureReason != "blocked_by_right-blocker" {
+		t.Fatalf("failure reason = %q, want right-side blocker", clicks[0].FailureReason)
+	}
+}
+
+func TestValidateLineClicksIgnoresDeclaredDependencies(t *testing.T) {
+	lines := []models.ArrowLine{
+		{
+			ID:        "free",
+			Direction: "right",
+			Points:    []models.Point{{X: 10, Y: 40}, {X: 20, Y: 40}},
+			DependsOn: []string{"not-a-physical-blocker"},
+		},
+	}
+
+	complete, state, clicks := ValidateLineClicks(lines, []string{"free"})
+	if !complete || len(clicks) != 1 || !clicks[0].Success || !state[0].Removed {
+		t.Fatalf("physical free path should clear despite declared dependency, complete=%v state=%#v clicks=%#v", complete, state, clicks)
+	}
+}
+
+func TestGenerateLinePuzzleIsSolvableByPhysicalSolver(t *testing.T) {
 	lines := GenerateLinePuzzle("test-seed", 40, 4)
-	clicks := make([]string, 0, len(lines))
 	for _, line := range lines {
 		if len(line.Points) < 2 {
 			t.Fatalf("line %s has no routed geometry: %#v", line.ID, line)
 		}
-		clicks = append(clicks, line.ID)
+	}
+	clicks, solvable := SolveLinePuzzle(lines)
+	if !solvable {
+		t.Fatalf("generated line puzzle was not physically solvable; partial solution=%v", clicks)
 	}
 
 	complete, _, history := ValidateLineClicks(lines, clicks)
 	if !complete {
-		t.Fatal("generated line puzzle was not solvable in generated order")
+		t.Fatal("generated line puzzle was not solvable using solver output")
 	}
 	for _, click := range history {
 		if !click.Success {
-			t.Fatalf("generated order produced failed click: %#v", click)
+			t.Fatalf("solver order produced failed click: %#v", click)
 		}
 	}
 }
@@ -112,12 +169,12 @@ func TestProfileGeneratedPuzzleUsesProfileLineCount(t *testing.T) {
 		t.Fatalf("expected %d lines, got %d", profile.LineCount, len(lines))
 	}
 
-	clicks := make([]string, 0, len(lines))
-	for _, line := range lines {
-		clicks = append(clicks, line.ID)
+	clicks, solvable := SolveLinePuzzle(lines)
+	if !solvable {
+		t.Fatal("expected profile-generated puzzle to be physically solvable")
 	}
 	complete, _, _ := ValidateLineClicks(lines, clicks)
 	if !complete {
-		t.Fatal("expected profile-generated puzzle to be solvable in generated order")
+		t.Fatal("expected profile-generated puzzle to be solvable using solver output")
 	}
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLine, ArrowLinePuzzle, normalizeLines } from '../maze-preview'
+import { ArrowLine, ArrowLinePuzzle, escapeBlocker, normalizeLines } from '../maze-preview'
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8080'
 
@@ -84,12 +84,11 @@ export default function TournamentsPage() {
 
   function clickLine(lineId: string) {
     setLines((current) => {
-      const removed = new Set(current.filter((line) => line.state === 'removed').map((line) => line.id))
+      const blocker = escapeBlocker(current, lineId)
       return current.map((line) => {
         if (line.id !== lineId || line.state === 'removed') return line
         setClickedLineIds((clicks) => [...clicks, lineId])
-        const blocked = (line.dependsOn ?? []).some((dependency) => !removed.has(dependency))
-        if (blocked) {
+        if (blocker) {
           window.setTimeout(() => {
             setLines((latest) => latest.map((item) => item.id === lineId && item.state === 'blocked' ? { ...item, state: 'ready' } : item))
           }, 3000)

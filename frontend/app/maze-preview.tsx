@@ -74,6 +74,130 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
 
+export function escapeBlocker(lines: ArrowLine[], lineId: string) {
+  const idx = lines.findIndex((line) => line.id === lineId)
+  if (idx < 0 || lines[idx].state === 'removed') return ''
+  const line = lines[idx]
+  const head = lineHead(line)
+  const [dirX, dirY] = directionVector(line.direction)
+  const rayEnd = boardExitPoint(head, dirX, dirY)
+  let blocker = ''
+  let bestDistance = Number.POSITIVE_INFINITY
+  lines.forEach((other, otherIdx) => {
+    if (otherIdx === idx || other.state === 'removed') return
+    const hit = rayHitsLine(head, rayEnd, dirX, dirY, other)
+    if (hit != null && hit < bestDistance) {
+      bestDistance = hit
+      blocker = other.id
+    }
+  })
+  return blocker
+}
+
+function lineHead(line: ArrowLine) {
+  const points = line.points && line.points.length > 1 ? line.points : fallbackPoints(line)
+  return points[points.length - 1]
+}
+
+function lineGeometry(line: ArrowLine) {
+  return line.points && line.points.length > 1 ? line.points : fallbackPoints(line)
+}
+
+function directionVector(direction: Direction): [number, number] {
+  switch (direction) {
+    case 'right':
+      return [1, 0]
+    case 'left':
+      return [-1, 0]
+    case 'up':
+      return [0, -1]
+    case 'down':
+      return [0, 1]
+  }
+}
+
+function boardExitPoint(head: { x: number; y: number }, dirX: number, dirY: number) {
+  if (dirX > 0) return { x: 101, y: head.y }
+  if (dirX < 0) return { x: -1, y: head.y }
+  if (dirY > 0) return { x: head.x, y: 101 }
+  return { x: head.x, y: -1 }
+}
+
+function rayHitsLine(
+  rayStart: { x: number; y: number },
+  rayEnd: { x: number; y: number },
+  dirX: number,
+  dirY: number,
+  line: ArrowLine,
+) {
+  const points = lineGeometry(line)
+  for (let index = 0; index < points.length - 1; index++) {
+    const hit = rayHitsSegment(rayStart, rayEnd, dirX, dirY, points[index], points[index + 1])
+    if (hit != null) return hit
+  }
+  return null
+}
+
+function rayHitsSegment(
+  rayStart: { x: number; y: number },
+  rayEnd: { x: number; y: number },
+  dirX: number,
+  dirY: number,
+  segA: { x: number; y: number },
+  segB: { x: number; y: number },
+) {
+  const eps = 0.001
+  if (Math.abs(segA.x - segB.x) < eps) {
+    const x = segA.x
+    const minY = Math.min(segA.y, segB.y)
+    const maxY = Math.max(segA.y, segB.y)
+    if (dirX === 0) {
+      if (Math.abs(rayStart.x - x) >= eps) return null
+      for (const y of [minY, maxY]) {
+        const hit = { x, y }
+        if (pointAhead(rayStart, dirX, dirY, hit) && pointOnRayBounds(rayStart, rayEnd, hit)) return Math.abs(y - rayStart.y)
+      }
+      return null
+    }
+    if (rayStart.y < minY - eps || rayStart.y > maxY + eps) return null
+    const hit = { x, y: rayStart.y }
+    return pointAhead(rayStart, dirX, dirY, hit) && pointOnRayBounds(rayStart, rayEnd, hit) ? Math.abs(x - rayStart.x) : null
+  }
+  if (Math.abs(segA.y - segB.y) < eps) {
+    const y = segA.y
+    const minX = Math.min(segA.x, segB.x)
+    const maxX = Math.max(segA.x, segB.x)
+    if (dirY === 0) {
+      if (Math.abs(rayStart.y - y) >= eps) return null
+      for (const x of [minX, maxX]) {
+        const hit = { x, y }
+        if (pointAhead(rayStart, dirX, dirY, hit) && pointOnRayBounds(rayStart, rayEnd, hit)) return Math.abs(x - rayStart.x)
+      }
+      return null
+    }
+    if (rayStart.x < minX - eps || rayStart.x > maxX + eps) return null
+    const hit = { x: rayStart.x, y }
+    return pointAhead(rayStart, dirX, dirY, hit) && pointOnRayBounds(rayStart, rayEnd, hit) ? Math.abs(y - rayStart.y) : null
+  }
+  return null
+}
+
+function pointAhead(start: { x: number; y: number }, dirX: number, dirY: number, point: { x: number; y: number }) {
+  const eps = 0.001
+  return (dirX > 0 && point.x > start.x + eps) ||
+    (dirX < 0 && point.x < start.x - eps) ||
+    (dirY > 0 && point.y > start.y + eps) ||
+    (dirY < 0 && point.y < start.y - eps)
+}
+
+function pointOnRayBounds(start: { x: number; y: number }, end: { x: number; y: number }, point: { x: number; y: number }) {
+  const eps = 0.001
+  return point.x >= Math.min(start.x, end.x) - eps &&
+    point.x <= Math.max(start.x, end.x) + eps &&
+    point.y >= Math.min(start.y, end.y) - eps &&
+    point.y <= Math.max(start.y, end.y) + eps
+}
+
 export function ArrowLinePuzzle({
   lines,
   label,

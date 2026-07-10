@@ -16,6 +16,16 @@ func GenerateLinePuzzle(seed string, count int, dependencyDepth int) []models.Ar
 }
 
 func generateLinePuzzle(seed string, profile models.DifficultyProfile) []models.ArrowLine {
+	for attempt := 0; attempt < 24; attempt++ {
+		candidate := generateLinePuzzleCandidate(seed+"-"+strconv.Itoa(attempt), profile)
+		if _, solvable := SolveLinePuzzle(candidate); solvable {
+			return candidate
+		}
+	}
+	return generateEscapeOnlyLinePuzzle(seed, profile)
+}
+
+func generateLinePuzzleCandidate(seed string, profile models.DifficultyProfile) []models.ArrowLine {
 	if profile.LineCount < 24 {
 		profile.LineCount = 24
 	}
@@ -111,6 +121,57 @@ func generateLinePuzzle(seed string, profile models.DifficultyProfile) []models.
 		})
 	}
 	return lines
+}
+
+func generateEscapeOnlyLinePuzzle(seed string, profile models.DifficultyProfile) []models.ArrowLine {
+	if profile.LineCount < 24 {
+		profile.LineCount = 24
+	}
+	rng := rand.New(rand.NewSource(int64(hashSeed(seed))))
+	lines := make([]models.ArrowLine, 0, profile.LineCount)
+	for i := 0; i < profile.LineCount; i++ {
+		direction := []string{"right", "down", "left", "up"}[i%4]
+		band := float64(i/profile.LineCount) * 82
+		x := 9 + math.Mod(float64(i*11)+rng.Float64()*5+band, 82)
+		y := 9 + math.Mod(float64(i*17)+rng.Float64()*5+band, 82)
+		switch direction {
+		case "right":
+			x = 90
+		case "left":
+			x = 10
+		case "down":
+			y = 90
+		case "up":
+			y = 10
+		}
+		end := models.Point{X: x, Y: y}
+		tail := movePoint(end, oppositeDirection(direction), 5+rng.Float64()*4)
+		points := []models.Point{tail, end}
+		lines = append(lines, models.ArrowLine{
+			ID:        lineID(i),
+			Direction: direction,
+			X:         tail.X,
+			Y:         tail.Y,
+			Length:    pathLength(points),
+			Points:    points,
+		})
+	}
+	return lines
+}
+
+func oppositeDirection(direction string) string {
+	switch direction {
+	case "right":
+		return "left"
+	case "left":
+		return "right"
+	case "up":
+		return "down"
+	case "down":
+		return "up"
+	default:
+		return "left"
+	}
 }
 
 type routeState struct {
@@ -344,13 +405,7 @@ func ValidateLineClicks(lines []models.ArrowLine, lineIDs []string) (bool, []mod
 			clicks = append(clicks, click)
 			continue
 		}
-		blocker := ""
-		for _, dependency := range line.DependsOn {
-			if !removed[dependency] {
-				blocker = dependency
-				break
-			}
-		}
+		blocker := escapeBlocker(state, idx)
 		if blocker != "" {
 			combo = 0
 			state[idx].Blocked = true
@@ -370,6 +425,181 @@ func ValidateLineClicks(lines []models.ArrowLine, lineIDs []string) (bool, []mod
 	}
 
 	return len(removed) == len(lines), state, clicks
+}
+
+func SolveLinePuzzle(lines []models.ArrowLine) ([]string, bool) {
+	state := make([]models.ArrowLine, len(lines))
+	copy(state, lines)
+	solution := make([]string, 0, len(lines))
+	for len(solution) < len(state) {
+		progress := false
+		for idx := range state {
+			if state[idx].Removed {
+				continue
+			}
+			if escapeBlocker(state, idx) == "" {
+				state[idx].Removed = true
+				state[idx].Blocked = false
+				solution = append(solution, state[idx].ID)
+				progress = true
+				break
+			}
+		}
+		if !progress {
+			return solution, false
+		}
+	}
+	return solution, true
+}
+
+func escapeBlocker(lines []models.ArrowLine, idx int) string {
+	if idx < 0 || idx >= len(lines) || lines[idx].Removed {
+		return ""
+	}
+	line := lines[idx]
+	head := lineHead(line)
+	dirX, dirY := directionVector(line.Direction)
+	if dirX == 0 && dirY == 0 {
+		return ""
+	}
+	rayEnd := boardExitPoint(head, dirX, dirY)
+	bestDistance := math.Inf(1)
+	blocker := ""
+	for otherIdx, other := range lines {
+		if otherIdx == idx || other.Removed {
+			continue
+		}
+		if distance, ok := rayHitsLine(head, rayEnd, dirX, dirY, other); ok && distance < bestDistance {
+			bestDistance = distance
+			blocker = other.ID
+		}
+	}
+	return blocker
+}
+
+func lineHead(line models.ArrowLine) models.Point {
+	if len(line.Points) > 0 {
+		return line.Points[len(line.Points)-1]
+	}
+	return movePoint(models.Point{X: line.X, Y: line.Y}, line.Direction, line.Length)
+}
+
+func lineGeometry(line models.ArrowLine) []models.Point {
+	if len(line.Points) > 1 {
+		return line.Points
+	}
+	start := models.Point{X: line.X, Y: line.Y}
+	return []models.Point{start, movePoint(start, line.Direction, line.Length)}
+}
+
+func directionVector(direction string) (float64, float64) {
+	switch direction {
+	case "right":
+		return 1, 0
+	case "left":
+		return -1, 0
+	case "up":
+		return 0, -1
+	case "down":
+		return 0, 1
+	default:
+		return 0, 0
+	}
+}
+
+func boardExitPoint(head models.Point, dirX, dirY float64) models.Point {
+	const boardMin = 0.0
+	const boardMax = 100.0
+	switch {
+	case dirX > 0:
+		return models.Point{X: boardMax + 1, Y: head.Y}
+	case dirX < 0:
+		return models.Point{X: boardMin - 1, Y: head.Y}
+	case dirY > 0:
+		return models.Point{X: head.X, Y: boardMax + 1}
+	default:
+		return models.Point{X: head.X, Y: boardMin - 1}
+	}
+}
+
+func rayHitsLine(rayStart, rayEnd models.Point, dirX, dirY float64, line models.ArrowLine) (float64, bool) {
+	points := lineGeometry(line)
+	for i := 0; i < len(points)-1; i++ {
+		if distance, ok := rayHitsSegment(rayStart, rayEnd, dirX, dirY, points[i], points[i+1]); ok {
+			return distance, true
+		}
+	}
+	return 0, false
+}
+
+func rayHitsSegment(rayStart, rayEnd models.Point, dirX, dirY float64, segA, segB models.Point) (float64, bool) {
+	const eps = 0.001
+	if almostEqual(segA.X, segB.X) {
+		x := segA.X
+		minY := math.Min(segA.Y, segB.Y)
+		maxY := math.Max(segA.Y, segB.Y)
+		if dirX == 0 {
+			if !almostEqual(rayStart.X, x) {
+				return 0, false
+			}
+			candidates := []float64{minY, maxY}
+			for _, y := range candidates {
+				if pointAhead(rayStart, dirX, dirY, models.Point{X: x, Y: y}) && pointOnRayBounds(rayStart, rayEnd, models.Point{X: x, Y: y}) {
+					return math.Abs(y - rayStart.Y), true
+				}
+			}
+			return 0, false
+		}
+		if rayStart.Y < minY-eps || rayStart.Y > maxY+eps {
+			return 0, false
+		}
+		hit := models.Point{X: x, Y: rayStart.Y}
+		if pointAhead(rayStart, dirX, dirY, hit) && pointOnRayBounds(rayStart, rayEnd, hit) {
+			return math.Abs(x - rayStart.X), true
+		}
+		return 0, false
+	}
+	if almostEqual(segA.Y, segB.Y) {
+		y := segA.Y
+		minX := math.Min(segA.X, segB.X)
+		maxX := math.Max(segA.X, segB.X)
+		if dirY == 0 {
+			if !almostEqual(rayStart.Y, y) {
+				return 0, false
+			}
+			candidates := []float64{minX, maxX}
+			for _, x := range candidates {
+				if pointAhead(rayStart, dirX, dirY, models.Point{X: x, Y: y}) && pointOnRayBounds(rayStart, rayEnd, models.Point{X: x, Y: y}) {
+					return math.Abs(x - rayStart.X), true
+				}
+			}
+			return 0, false
+		}
+		if rayStart.X < minX-eps || rayStart.X > maxX+eps {
+			return 0, false
+		}
+		hit := models.Point{X: rayStart.X, Y: y}
+		if pointAhead(rayStart, dirX, dirY, hit) && pointOnRayBounds(rayStart, rayEnd, hit) {
+			return math.Abs(y - rayStart.Y), true
+		}
+	}
+	return 0, false
+}
+
+func pointAhead(start models.Point, dirX, dirY float64, point models.Point) bool {
+	const eps = 0.001
+	return (dirX > 0 && point.X > start.X+eps) ||
+		(dirX < 0 && point.X < start.X-eps) ||
+		(dirY > 0 && point.Y > start.Y+eps) ||
+		(dirY < 0 && point.Y < start.Y-eps)
+}
+
+func pointOnRayBounds(start, end, point models.Point) bool {
+	const eps = 0.001
+	return point.X >= math.Min(start.X, end.X)-eps &&
+		point.X <= math.Max(start.X, end.X)+eps &&
+		point.Y >= math.Min(start.Y, end.Y)-eps &&
+		point.Y <= math.Max(start.Y, end.Y)+eps
 }
 
 func hashSeed(seed string) uint64 {

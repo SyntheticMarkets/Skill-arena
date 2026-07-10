@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLine, ArrowLinePuzzle, normalizeLines } from './maze-preview'
+import { ArrowLine, ArrowLinePuzzle, escapeBlocker, normalizeLines } from './maze-preview'
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8080'
 
@@ -96,10 +96,6 @@ function livingLines(preview: PuzzlePreview | null) {
   return lines.length > 0 ? lines : normalizeLines(fallbackLines)
 }
 
-function canClear(line: ArrowLine, cleared: Set<string>) {
-  return (line.dependsOn ?? []).every((dependency) => cleared.has(dependency))
-}
-
 export default function Home() {
   const [stats, setStats] = useState<PlatformStats | null>(null)
   const [preview, setPreview] = useState<PuzzlePreview | null>(null)
@@ -165,7 +161,8 @@ export default function Home() {
 
     const line = puzzleLines.find((item) => item.id === lineId)
     if (!line) return
-    if (!canClear(line, clearedIds)) {
+    const blocker = escapeBlocker(puzzleLines.map((item) => clearedIds.has(item.id) ? { ...item, state: 'removed' } : item), lineId)
+    if (blocker) {
       setPuzzleState('blocked')
       if ('vibrate' in navigator) navigator.vibrate(35)
       setPuzzleLines((current) => current.map((item) => item.id === lineId ? { ...item, state: 'blocked' } : item))

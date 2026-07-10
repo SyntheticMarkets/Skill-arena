@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLine, ArrowLinePuzzle, normalizeLines } from '../maze-preview'
+import { ArrowLine, ArrowLinePuzzle, escapeBlocker, normalizeLines } from '../maze-preview'
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8080'
 
@@ -89,7 +89,7 @@ export default function GamesPage() {
     setActiveMode('practice')
     setClickedLineIds([])
     setLines(normalizeLines(body.lines))
-    setMessage('Server-generated Maze Arena board ready. Clear every arrow line in dependency order.')
+    setMessage('Server-generated Maze Arena board ready. Clear arrows only when their forward path can leave the board.')
   }
 
   async function joinPvP(event: React.FormEvent<HTMLFormElement>) {
@@ -126,12 +126,11 @@ export default function GamesPage() {
 
   function clickLine(lineId: string) {
     setLines((current) => {
-      const removed = new Set(current.filter((line) => line.state === 'removed').map((line) => line.id))
+      const blocker = escapeBlocker(current, lineId)
       return current.map((line) => {
         if (line.id !== lineId || line.state === 'removed') return line
         setClickedLineIds((clicks) => [...clicks, lineId])
-        const blocked = (line.dependsOn ?? []).some((dependency) => !removed.has(dependency))
-        if (blocked) {
+        if (blocker) {
           window.setTimeout(() => {
             setLines((latest) => latest.map((item) => item.id === lineId && item.state === 'blocked' ? { ...item, state: 'ready' } : item))
           }, 3000)
@@ -173,7 +172,7 @@ export default function GamesPage() {
         <div>
           <span className="eyebrow">Game Hub</span>
           <h1>Choose your arena.</h1>
-          <p>Maze Arena is a dependency-solving arrow-line puzzle. Clear every directional line in the correct order.</p>
+          <p>Maze Arena is a physical escape puzzle. Tap arrows that can leave the board without colliding.</p>
         </div>
       </section>
       {error ? <p className="form-error">{error}</p> : null}
