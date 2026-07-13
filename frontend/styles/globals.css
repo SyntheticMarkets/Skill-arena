@@ -336,7 +336,7 @@ button.entry-button {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(300px, 1.1fr);
   gap: clamp(28px, 6vw, 80px);
-  align-items: start;
+  align-items: flex-start;
 }
 
 .signal-grid,
@@ -535,6 +535,496 @@ button.entry-button {
   outline-offset: 4px;
 }
 
+.arena-shell {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 74% 8%, rgba(26, 211, 255, 0.12), transparent 28rem),
+    linear-gradient(135deg, #070a10 0%, #0d111a 52%, #090b10 100%);
+}
+
+.arena-sidebar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  height: 100vh;
+  padding: 24px 18px;
+  border-right: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(3, 7, 12, 0.72);
+  backdrop-filter: blur(18px);
+}
+
+.sa-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #ffffff;
+}
+
+.sa-brand strong,
+.sa-brand small {
+  display: block;
+}
+
+.sa-brand strong {
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sa-brand small {
+  margin-top: 3px;
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+
+.sa-shield {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid rgba(26, 211, 255, 0.42);
+  background: rgba(26, 211, 255, 0.1);
+  color: #19d3ff;
+  font-size: 0.78rem;
+  font-weight: 900;
+  box-shadow: 0 0 28px rgba(26, 211, 255, 0.2);
+}
+
+.arena-nav {
+  display: grid;
+  gap: 8px;
+}
+
+.arena-nav a {
+  padding: 12px 13px;
+  border: 1px solid transparent;
+  color: #cbd5e1;
+  font-size: 0.86rem;
+  font-weight: 700;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.arena-nav a:hover,
+.arena-nav a:focus-visible {
+  border-color: rgba(26, 211, 255, 0.26);
+  background: rgba(26, 211, 255, 0.08);
+  color: #ffffff;
+}
+
+.arena-main {
+  min-width: 0;
+}
+
+.arena-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  min-height: 72px;
+  padding: 16px clamp(18px, 4vw, 42px);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(6, 10, 16, 0.8);
+  backdrop-filter: blur(18px);
+}
+
+.arena-topbar strong,
+.arena-topbar span {
+  display: block;
+}
+
+.arena-topbar strong {
+  color: #ffffff;
+  font-size: 0.9rem;
+}
+
+.arena-topbar span {
+  margin-top: 2px;
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.arena-topbar nav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: #cbd5e1;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.page-shell,
+.container {
+  width: min(1320px, 100%);
+  margin: 0 auto;
+  padding: clamp(22px, 4vw, 42px);
+}
+
+.auth-container {
+  display: grid;
+  min-height: calc(100vh - 72px);
+  place-items: center;
+}
+
+.form-card {
+  width: min(520px, 100%);
+  padding: clamp(24px, 4vw, 40px);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.86), rgba(8, 13, 22, 0.86)),
+    rgba(15, 23, 42, 0.72);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.38);
+}
+
+.form-card h1,
+.dashboard-command h1,
+.panel h2,
+.panel-large h2,
+.metric-card strong,
+.game-tile h3 {
+  margin: 0;
+  color: #ffffff;
+  letter-spacing: 0;
+}
+
+.form-card h1,
+.dashboard-command h1 {
+  font-size: clamp(2.1rem, 5vw, 4.2rem);
+  line-height: 0.98;
+}
+
+.form-card p,
+.dashboard-command p,
+.panel p,
+.panel-large p,
+.game-tile p {
+  color: #aab7c9;
+  line-height: 1.65;
+}
+
+.form-grid {
+  display: grid;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.form-grid label {
+  display: grid;
+  gap: 8px;
+  color: #dbe7f4;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(3, 7, 12, 0.74);
+  color: #f8fafc;
+  padding: 0 13px;
+  outline: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #64748b;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: rgba(26, 211, 255, 0.72);
+  box-shadow: 0 0 0 3px rgba(26, 211, 255, 0.12);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px;
+  padding: 0 18px;
+  border: 1px solid rgba(246, 196, 83, 0.62);
+  background: linear-gradient(135deg, #f6c453, #f59e0b);
+  color: #0a0d12;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  box-shadow: 0 16px 44px rgba(245, 158, 11, 0.2);
+}
+
+.button.secondary {
+  border-color: rgba(26, 211, 255, 0.32);
+  background: rgba(26, 211, 255, 0.08);
+  color: #dff7ff;
+  box-shadow: none;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.7);
+  opacity: 0.52;
+}
+
+.form-error,
+.form-success {
+  margin: 18px 0 0;
+  padding: 13px 14px;
+  border: 1px solid;
+  font-weight: 800;
+}
+
+.form-error {
+  border-color: rgba(239, 68, 68, 0.38);
+  background: rgba(127, 29, 29, 0.24);
+  color: #fecaca;
+}
+
+.form-success {
+  border-color: rgba(34, 197, 94, 0.38);
+  background: rgba(20, 83, 45, 0.24);
+  color: #bbf7d0;
+}
+
+.dashboard-command {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+  padding: clamp(22px, 4vw, 34px);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: radial-gradient(circle at 78% 10%, rgba(26, 211, 255, 0.12), transparent 26rem), rgba(15, 23, 42, 0.54);
+}
+
+.dashboard-command p {
+  max-width: 660px;
+  margin: 14px 0 0;
+}
+
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.eyebrow,
+.tile-tag {
+  display: inline-flex;
+  margin-bottom: 10px;
+  color: #19d3ff;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.metric-grid,
+.content-grid,
+.hub-grid,
+.arena-stage,
+.opponent-stats {
+  display: grid;
+  gap: 16px;
+}
+
+.metric-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 16px;
+}
+
+.content-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hub-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hub-grid.compact {
+  margin-top: 16px;
+}
+
+.arena-stage {
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+}
+
+.metric-card,
+.panel,
+.panel-large,
+.game-tile,
+.puzzle-panel,
+.opponent-panel {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.58);
+  box-shadow: 0 18px 58px rgba(0, 0, 0, 0.24);
+}
+
+.metric-card {
+  min-height: 132px;
+  padding: 20px;
+}
+
+.metric-card span,
+.metric-card small {
+  display: block;
+  color: #94a3b8;
+}
+
+.metric-card span {
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.metric-card strong {
+  display: block;
+  margin: 14px 0 8px;
+  font-size: clamp(1.7rem, 3vw, 2.7rem);
+}
+
+.metric-card small {
+  font-size: 0.82rem;
+}
+
+.panel,
+.panel-large,
+.puzzle-panel,
+.opponent-panel {
+  padding: 22px;
+}
+
+.panel-large {
+  grid-column: span 2;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.panel-heading a,
+.task-list a {
+  color: #f6c453;
+  font-weight: 900;
+}
+
+.task-list {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(3, 7, 12, 0.28);
+}
+
+.progress-rail {
+  height: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(3, 7, 12, 0.52);
+}
+
+.progress-rail span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #19d3ff, #f6c453);
+}
+
+.game-tile {
+  min-height: 220px;
+  padding: 22px;
+}
+
+.game-tile.featured {
+  background:
+    radial-gradient(circle at 90% 12%, rgba(246, 196, 83, 0.16), transparent 18rem),
+    rgba(15, 23, 42, 0.72);
+}
+
+.game-tile.locked {
+  opacity: 0.74;
+}
+
+.match-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.match-list button {
+  min-height: 42px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(3, 7, 12, 0.4);
+  color: #dbe7f4;
+  text-align: left;
+  padding: 0 12px;
+}
+
+.puzzle-panel .button {
+  margin-bottom: 16px;
+}
+
+.pixelated {
+  opacity: 0.52;
+  filter: blur(2.4px) contrast(1.25);
+  pointer-events: none;
+}
+
+.opponent-stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.opponent-stats span {
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  color: #cbd5e1;
+  font-size: 0.82rem;
+}
+
+.leaderboard-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.leaderboard-table th,
+.leaderboard-table td {
+  padding: 13px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  text-align: left;
+}
+
+.leaderboard-table th {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 @keyframes logo-construct {
   from {
     opacity: 0;
@@ -635,6 +1125,37 @@ button.entry-button {
 }
 
 @media (max-width: 980px) {
+  .arena-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .arena-sidebar {
+    position: relative;
+    height: auto;
+  }
+
+  .arena-nav {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .dashboard-command,
+  .arena-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .metric-grid,
+  .content-grid,
+  .hub-grid,
+  .arena-stage,
+  .opponent-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .panel-large {
+    grid-column: auto;
+  }
+
   .entry-nav {
     align-items: flex-start;
   }
@@ -653,6 +1174,26 @@ button.entry-button {
 }
 
 @media (max-width: 680px) {
+  .arena-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-shell,
+  .container {
+    padding: 18px;
+  }
+
+  .arena-topbar {
+    min-height: 0;
+  }
+
+  .quick-actions,
+  .panel-heading,
+  .task-list li {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .entry-nav {
     position: absolute;
     padding: 16px;
