@@ -28,7 +28,7 @@ The system must support:
 
 - Platform pages.
 - Wallet and financial flows.
-- Game Hub.
+- Arena Hub.
 - Maze Arena.
 - Future games.
 - Admin and treasury tools.

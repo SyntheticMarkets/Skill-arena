@@ -435,7 +435,7 @@ Potential failure points:
 - First deposit is requested before the player has experienced enough value.
 - Wallet feels like a generic balance table.
 - Dashboard becomes a data dump.
-- Game Hub hides the best next action.
+- Arena Hub hides the best next action.
 - Losing feels empty.
 - Replay is hard to understand.
 - Withdrawal status feels vague.

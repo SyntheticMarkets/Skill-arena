@@ -210,7 +210,7 @@ What makes them trust the platform:
 | First practice match | Focused | I understand the core challenge. |
 | Dashboard | Motivated | I know what to do next. |
 | Wallet | Confident | My money and balances are clear. |
-| Game Hub | In control | I can choose the right mode. |
+| Arena Hub | In control | I can choose the right module without leaving Skill Arena. |
 | Queue | Anticipation | A real match is about to happen. |
 | Match | Focus | Every move matters. |
 | Defeat | Informed | I know what to improve. |

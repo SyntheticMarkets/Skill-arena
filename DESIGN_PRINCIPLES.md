@@ -23,7 +23,7 @@ Examples:
 - Landing: create account.
 - Dashboard: continue playing.
 - Wallet: choose deposit or withdraw based on context.
-- Game Hub: select mode.
+- Arena Hub: choose a game module.
 - Match Summary: replay, rematch, or queue again.
 
 Secondary actions may exist, but they must not compete visually with the primary action.

@@ -35,7 +35,7 @@ export default function ChallengesPage() {
         <article className="panel">
           <span className="eyebrow">PvP</span>
           <h2>Ranked queue</h2>
-          <p>Join a live opponent queue from the Game Hub.</p>
+          <p>Join a live opponent queue from Arena Hub.</p>
           <Link href="/games">Queue</Link>
         </article>
       </section>

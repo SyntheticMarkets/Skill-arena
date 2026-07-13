@@ -124,8 +124,8 @@ export default function DashboardPage() {
         <article className="panel-large">
           <div className="panel-heading">
             <div>
-              <span className="eyebrow">Featured Games</span>
-              <h2>Game Hub</h2>
+              <span className="eyebrow">Arena Hub</span>
+              <h2>Choose a module</h2>
             </div>
             <Link href="/games">View all</Link>
           </div>
@@ -139,7 +139,7 @@ export default function DashboardPage() {
             <article className="game-tile locked">
               <span className="tile-tag">Coming Soon</span>
               <h3>Memory Arena</h3>
-              <p>Future competitive game sharing the same wallet and rankings.</p>
+              <p>Future competitive module sharing Arena Hub wallet, trust, and overall progression.</p>
             </article>
           </div>
         </article>

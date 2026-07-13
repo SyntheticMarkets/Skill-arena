@@ -16,7 +16,7 @@ Frontend/product order:
 4. Authentication
 5. Dashboard
 6. Wallet
-7. Game Hub
+7. Arena Hub
 8. Maze Arena
 9. Challenges
 10. Ranked
@@ -68,7 +68,7 @@ Authentication
 Authenticated App Shell
   -> Dashboard
   -> Wallet
-  -> Game Hub
+  -> Arena Hub
   -> Challenges
   -> Ranked
   -> Leaderboards
@@ -85,7 +85,7 @@ Authenticated App Shell
 Dashboard
   -> Continue Playing
   -> Daily Challenge
-  -> Game Hub
+  -> Arena Hub
   -> Wallet Summary
   -> Leaderboard Preview
   -> Season Progress
@@ -106,12 +106,16 @@ Wallet
   -> Statements
   -> Export
 
-Game Hub
-  -> Practice
-  -> Ranked
-  -> Tournament
-  -> Challenge
-  -> Training
+Arena Hub
+  -> Overall Profile
+  -> Wallet Summary
+  -> Overall Progression
+  -> Platform Notifications
+  -> Game Modules
+  -> Maze Arena
+  -> Memory Arena
+  -> Reaction Arena
+  -> Logic Arena
   -> Future Game Cards
   -> Matchmaking
   -> Live Match
@@ -119,9 +123,15 @@ Game Hub
   -> Replay
 
 Maze Arena
+  -> Maze Home
+  -> Practice
+  -> Ranked
+  -> Tournament
   -> Game Rules
   -> Puzzle Board
   -> Game-Specific Controls
+  -> Maze Statistics
+  -> Maze Leaderboard
   -> Maze Replay Renderer
 
 Matchmaking
@@ -215,13 +225,13 @@ Admin
 Primary loop:
 
 ```text
-Dashboard -> Game Hub -> Matchmaking/Challenge -> Live Match -> Summary -> Replay/Rematch -> Dashboard
+Dashboard -> Arena Hub -> Game Module -> Matchmaking/Challenge -> Live Match -> Summary -> Replay/Rematch -> Arena Hub
 ```
 
 Money loop:
 
 ```text
-Dashboard -> Wallet -> Deposit -> Game Hub -> Live Match -> Wallet -> Withdraw
+Arena Hub -> Wallet -> Deposit -> Arena Hub -> Game Module -> Live Match -> Arena Hub -> Wallet -> Withdraw
 ```
 
 Competitive loop:
@@ -247,7 +257,7 @@ Dashboard -> Verification/Security -> Calibration -> Clean Matches -> Trust Scor
 Top-level navigation should prioritize:
 
 1. Dashboard
-2. Play/Game Hub
+2. Arena Hub
 3. Wallet
 4. Ranked
 5. Tournaments

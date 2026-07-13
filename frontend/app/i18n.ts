@@ -2,7 +2,7 @@ export const t = {
   brandName: 'Skill Arena',
   brandSubtitle: 'Competitive Intelligence Platform',
   navDashboard: 'Dashboard',
-  navGames: 'Games',
+  navGames: 'Arena Hub',
   navChallenges: 'Challenges',
   navTournaments: 'Tournaments',
   navLeaderboards: 'Leaderboards',

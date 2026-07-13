@@ -173,9 +173,9 @@ export default function GamesPage() {
     <main className="page-shell">
       <section className="dashboard-command">
         <div>
-          <span className="eyebrow">Game Hub</span>
+          <span className="eyebrow">Arena Hub</span>
           <h1>Choose your arena.</h1>
-          <p>Maze Arena is a physical escape puzzle. Tap arrows that can leave the board without colliding.</p>
+          <p>Enter a game module from Skill Arena. Wallet, profile, trust, and overall progression stay with Arena Hub.</p>
         </div>
       </section>
       {error ? <p className="form-error">{error}</p> : null}
@@ -184,7 +184,7 @@ export default function GamesPage() {
       <section className="content-grid">
         <article className="panel">
           <span className="eyebrow">Maze Arena</span>
-          <h2>Server Board</h2>
+          <h2>Maze module</h2>
           <button className="button secondary" type="button" onClick={startServerBoard}>Start Server Board</button>
           <form onSubmit={joinPvP} className="form-grid">
             <label>Queue<select value={queueType} onChange={(event) => setQueueType(event.target.value)}><option value="ranked">Ranked</option><option value="casual">Casual</option></select></label>

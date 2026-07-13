@@ -78,6 +78,8 @@ Examples:
 
 Games emit events but never settle wallet, progression, tournaments, challenges, or trust directly.
 
+Live events flow through the Session Gateway: one authenticated WebSocket per logged-in client. REST remains the interface for account, wallet, settings, and security request/response flows.
+
 ## Replay Rule
 
 Replays store seed, rules version, game version, action stream, timing, and server signature. They do not trust client-provided board state or outcome.

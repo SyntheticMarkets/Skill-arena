@@ -247,9 +247,9 @@ What it teaches:
 
 - Every cent has a state, reason, and next step.
 
-## Game Hub Story
+## Arena Hub Story
 
-Game Hub should feel like choosing an arena path, not browsing a catalog.
+Arena Hub should feel like the player's home inside Skill Arena: wallet, profile, progression, notifications, and game modules in one central command space.
 
 ```text
 +------------------------------------------------------------+
