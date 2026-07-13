@@ -7,7 +7,10 @@ import (
 	"skill-arena/internal/arena/core"
 )
 
-var ErrModuleNotFound = errors.New("game module not found")
+var (
+	ErrModuleNotFound  = errors.New("game module not found")
+	ErrInvalidManifest = errors.New("invalid game module manifest")
+)
 
 type Registry struct {
 	modules map[string]core.GameModule
@@ -17,17 +20,21 @@ func New(modules ...core.GameModule) *Registry {
 	r := &Registry{modules: map[string]core.GameModule{}}
 	for _, module := range modules {
 		if module != nil {
-			r.modules[module.ID()] = module
+			_ = r.Register(module)
 		}
 	}
 	return r
 }
 
-func (r *Registry) Register(module core.GameModule) {
+func (r *Registry) Register(module core.GameModule) error {
 	if r == nil || module == nil {
-		return
+		return ErrModuleNotFound
+	}
+	if err := ValidateManifest(module.Manifest()); err != nil {
+		return err
 	}
 	r.modules[module.ID()] = module
+	return nil
 }
 
 func (r *Registry) Get(id string) (core.GameModule, error) {
@@ -39,6 +46,19 @@ func (r *Registry) Get(id string) (core.GameModule, error) {
 		return nil, ErrModuleNotFound
 	}
 	return module, nil
+}
+
+func ValidateManifest(manifest core.Manifest) error {
+	if manifest.ID == "" || manifest.Name == "" || manifest.Version == "" {
+		return ErrInvalidManifest
+	}
+	if manifest.Versions.Rules == "" || manifest.Versions.Replay == "" || manifest.Versions.Protocol == "" {
+		return ErrInvalidManifest
+	}
+	if manifest.MinimumPlayers < 1 || manifest.MaximumPlayers < manifest.MinimumPlayers {
+		return ErrInvalidManifest
+	}
+	return nil
 }
 
 func (r *Registry) List() []core.Metadata {

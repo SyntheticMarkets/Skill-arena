@@ -1,0 +1,30 @@
+{
+  "id": "maze_arena",
+  "name": "Maze Arena",
+  "description": "Deterministic arrow-path puzzle competition.",
+  "category": "Puzzle",
+  "version": "1.0.0",
+  "author": "Skill Arena",
+  "difficulty": "Procedural",
+  "minimumPlayers": 1,
+  "maximumPlayers": 2,
+  "averageTimeSeconds": 120,
+  "rendererKey": "maze-arena",
+  "modes": ["practice", "ranked", "pvp", "tournament", "house"],
+  "versions": {
+    "game": "1.0.0",
+    "rules": "v1.0.0",
+    "replay": "v1",
+    "protocol": "v1"
+  },
+  "capabilities": {
+    "practice": true,
+    "pvp": true,
+    "replay": true,
+    "tournament": true,
+    "spectator": true,
+    "ai": false,
+    "teams": false,
+    "coins": true
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "id": "test_arena",
+  "name": "Test Arena",
+  "description": "Minimal test module proving Arena Core plug-in behavior.",
+  "category": "Test",
+  "version": "1.0.0",
+  "author": "Skill Arena",
+  "difficulty": "None",
+  "minimumPlayers": 1,
+  "maximumPlayers": 1,
+  "averageTimeSeconds": 10,
+  "rendererKey": "test-arena",
+  "modes": ["practice"],
+  "versions": {
+    "game": "1.0.0",
+    "rules": "v1",
+    "replay": "v1",
+    "protocol": "v1"
+  },
+  "capabilities": {
+    "practice": true,
+    "pvp": false,
+    "replay": true,
+    "tournament": false,
+    "spectator": false,
+    "ai": false,
+    "teams": false,
+    "coins": false
+  }
+}

@@ -23,8 +23,60 @@ Backend modules implement `internal/arena/core.GameModule`.
 Current module:
 
 - `maze_arena` in `backend/internal/games/maze`
+- `test_arena` in `backend/internal/games/testarena` for modularity tests only
 
 Future modules should implement the same contract without calling wallet, payment, leaderboard, tournament, or challenge services directly.
+
+## Manifests And Capabilities
+
+Every game module owns a `module.json` manifest.
+
+The manifest declares:
+
+- game ID
+- name and description
+- version
+- rules version
+- replay version
+- protocol version
+- renderer key
+- supported modes
+- minimum and maximum players
+- average match time
+- capability flags
+
+Arena Core never assumes a game supports PvP, replay, tournaments, spectator mode, AI, teams, or coins. The module manifest declares that support.
+
+## Contexts
+
+Game modules receive one authoritative context object.
+
+`SessionContext` carries session, actor, wallet, season, league, trust, house, tournament, practice, and configuration data.
+
+`ActionContext` carries authenticated actor, session, action stream, sequence number, replay position, latency, and server receive time.
+
+The client cannot override context values. Arena Core builds them from JWT-authenticated state.
+
+## Event Bus
+
+Arena Core formalizes platform events. Games emit events; platform systems consume them.
+
+Examples:
+
+- `practice_started`
+- `puzzle_generated`
+- `action_accepted`
+- `action_rejected`
+- `puzzle_solved`
+- `rewards_calculated`
+- `wallet_credited`
+- `challenge_updated`
+- `xp_granted`
+- `replay_signed`
+- `statistics_updated`
+- `notification_sent`
+
+Games emit events but never settle wallet, progression, tournaments, challenges, or trust directly.
 
 ## Replay Rule
 
@@ -52,3 +104,7 @@ Replays store seed, rules version, game version, action stream, timing, and serv
 - replay result
 
 Those are server-owned values.
+
+## Freeze Rule
+
+Arena Core v1.0 is an extension boundary, not a rewrite target. Future work should add modules and capabilities through the existing interfaces.

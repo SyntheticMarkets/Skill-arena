@@ -2,6 +2,8 @@ package maze
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
 	"errors"
 	"strconv"
 
@@ -13,10 +15,19 @@ import (
 
 const ModuleID = "maze_arena"
 
-type Module struct{}
+//go:embed module.json
+var manifestBytes []byte
+
+type Module struct {
+	manifest core.Manifest
+}
 
 func New() Module {
-	return Module{}
+	var manifest core.Manifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		panic(err)
+	}
+	return Module{manifest: manifest}
 }
 
 func (m Module) ID() string {
@@ -27,18 +38,36 @@ func (m Module) Name() string {
 	return "Maze Arena"
 }
 
+func (m Module) Manifest() core.Manifest {
+	return m.manifest
+}
+
+func (m Module) Capabilities() core.CapabilityFlags {
+	return m.manifest.Capabilities
+}
+
 func (m Module) Metadata() core.Metadata {
+	manifest := m.Manifest()
 	return core.Metadata{
-		ID:          ModuleID,
-		Name:        m.Name(),
-		Version:     game.GameRulesVersion,
-		Modes:       []string{"practice", "ranked", "pvp", "tournament", "house"},
-		RendererKey: "maze-arena",
+		ID:             manifest.ID,
+		Name:           manifest.Name,
+		Description:    manifest.Description,
+		Category:       manifest.Category,
+		Version:        manifest.Version,
+		Author:         manifest.Author,
+		Difficulty:     manifest.Difficulty,
+		MinimumPlayers: manifest.MinimumPlayers,
+		MaximumPlayers: manifest.MaximumPlayers,
+		AverageTimeSec: manifest.AverageTimeSec,
+		Modes:          append([]string(nil), manifest.Modes...),
+		RendererKey:    manifest.RendererKey,
+		Versions:       manifest.Versions,
+		Capabilities:   manifest.Capabilities,
 	}
 }
 
 func (m Module) CreateSession(context.Context, core.SessionRequest) (core.SessionSpec, error) {
-	return core.SessionSpec{GameID: ModuleID, RulesVersion: game.GameRulesVersion, GameVersion: game.GeneratorVersion}, nil
+	return core.SessionSpec{GameID: ModuleID, RulesVersion: m.manifest.Versions.Rules, GameVersion: m.manifest.Versions.Game}, nil
 }
 
 func (m Module) JoinSession(context.Context, core.SessionRequest) error {
@@ -51,6 +80,16 @@ func (m Module) StartSession(ctx context.Context, session *models.GameSession) e
 	}
 	if session == nil {
 		return errors.New("session is required")
+	}
+	return nil
+}
+
+func (m Module) ResumeSession(ctx context.Context, req core.SessionRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if req.ActorUserID == "" {
+		return errors.New("actor user id is required")
 	}
 	return nil
 }
@@ -132,12 +171,29 @@ func (m Module) SubmitAction(ctx context.Context, req core.ActionRequest) (core.
 	return core.ActionResult{Accepted: true, Complete: true, Valid: valid, History: validatedHistory, Lines: session.Lines, Clicks: session.Clicks, Events: arena.Events()}, nil
 }
 
+func (m Module) SyncSession(ctx context.Context, req core.SessionRequest) (core.SessionSpec, error) {
+	if err := ctx.Err(); err != nil {
+		return core.SessionSpec{}, err
+	}
+	return core.SessionSpec{GameID: ModuleID, RulesVersion: m.manifest.Versions.Rules, GameVersion: m.manifest.Versions.Game}, nil
+}
+
+func (m Module) LeaveSession(ctx context.Context, req core.SessionRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if req.ActorUserID == "" {
+		return errors.New("actor user id is required")
+	}
+	return nil
+}
+
 func (m Module) FinishSession(context.Context, *models.GameSession, core.ActionResult) error {
 	return nil
 }
 
 func (m Module) Replay() core.ReplayContract {
-	return core.ReplayContract{Version: game.ReplayVersion, RequiredStreams: []string{"seed", "actions", "timing"}, IntegrityRequired: true}
+	return core.ReplayContract{Version: m.manifest.Versions.Replay, RequiredStreams: []string{"seed", "actions", "timing"}, IntegrityRequired: true}
 }
 
 func (m Module) Statistics() core.StatisticsContract {
