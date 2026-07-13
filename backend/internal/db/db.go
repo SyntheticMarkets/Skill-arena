@@ -14,14 +14,19 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"skill-arena/internal/arena/core"
+	arenaregistry "skill-arena/internal/arena/registry"
+	arenasecurity "skill-arena/internal/arena/security"
 	"skill-arena/internal/cache"
 	"skill-arena/internal/config"
 	"skill-arena/internal/game"
 	"skill-arena/internal/game/puzzle"
+	mazegame "skill-arena/internal/games/maze"
 	"skill-arena/internal/id"
 	"skill-arena/internal/matchmaking"
 	"skill-arena/internal/models"
@@ -60,6 +65,7 @@ type Store struct {
 	workerHealth   map[string]*models.WorkerHealth
 	backups        []*models.BackupRecord
 	cache          *cache.Cache
+	arenaRegistry  *arenaregistry.Registry
 	settings       *config.RuntimeSettings
 	pvpMatches     map[string]*models.PvPMatch
 	pvpSubmissions map[string][]*models.PvPSubmission
@@ -220,6 +226,7 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 		workerHealth:   map[string]*models.WorkerHealth{},
 		backups:        []*models.BackupRecord{},
 		cache:          cache.New(),
+		arenaRegistry:  arenaregistry.New(mazegame.New()),
 		settings:       config.Runtime(),
 		pvpMatches:     map[string]*models.PvPMatch{},
 		pvpSubmissions: map[string][]*models.PvPSubmission{},
@@ -315,6 +322,17 @@ func (s *Store) puzzleServiceLocked() *puzzle.Service {
 		s.puzzleRepo = puzzle.NewMemoryRepository()
 	}
 	return puzzle.NewService(settings.Security.PuzzleSecret, s.puzzleRepo)
+}
+
+func (s *Store) arenaModuleForSessionLocked(session *models.GameSession) (core.GameModule, error) {
+	if s.arenaRegistry == nil {
+		s.arenaRegistry = arenaregistry.New(mazegame.New())
+	}
+	gameID := session.Mode
+	if gameID == "" || gameID == "maze" || gameID == "game" || gameID == "calibration" {
+		gameID = mazegame.ModuleID
+	}
+	return s.arenaRegistry.Get(gameID)
 }
 
 func (s *Store) load() error {
@@ -5354,36 +5372,38 @@ func (s *Store) SubmitMazeMoves(ctx context.Context, userID string, sessionID st
 		}
 	}
 
-	directions := make([]string, len(moves))
-	for i, move := range moves {
-		directions[i] = move.Direction
+	actor, err := arenasecurity.FromUser(userID, "")
+	if err != nil {
+		return nil, err
 	}
-	valid := false
-	history := moves
-	if len(session.Lines) > 0 {
-		clickIDs := make([]string, 0, len(moves))
-		for _, move := range moves {
-			clickIDs = append(clickIDs, move.Direction)
+	if err := arenasecurity.AuthorizeSession(actor, session); err != nil {
+		return nil, err
+	}
+	module, err := s.arenaModuleForSessionLocked(session)
+	if err != nil {
+		return nil, err
+	}
+	actions := make([]core.PlayerAction, 0, len(moves))
+	for i, move := range moves {
+		actionType := "click"
+		if len(session.Lines) == 0 {
+			actionType = "move"
 		}
-		valid, session.Lines, session.Clicks = game.ValidateLineClicks(session.Lines, clickIDs)
-	} else {
-		maze := &game.Maze{
-			Width:  session.Width,
-			Height: session.Height,
-			Cells:  session.MazeCells,
-			StartX: session.StartX,
-			StartY: session.StartY,
-			EndX:   session.EndX,
-			EndY:   session.EndY,
-		}
-		var err error
-		valid, history, err = game.ValidateMazeMoves(maze, directions)
-		if err != nil {
-			return nil, err
-		}
+		actions = append(actions, core.PlayerAction{ActionType: actionType, TargetID: move.Direction, ClientTime: move.Timestamp, Metadata: map[string]string{"sequence": strconv.Itoa(i)}})
+	}
+	result, err := module.SubmitAction(ctx, core.ActionRequest{
+		ActorUserID: actor.UserID,
+		Session:     session,
+		Actions:     actions,
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	session.Moves = history
+	valid := result.Valid
+	session.Moves = result.History
+	session.Lines = result.Lines
+	session.Clicks = result.Clicks
 	completedAt := time.Now().UTC()
 	session.CompletedAt = &completedAt
 	session.IsFinished = true
