@@ -14,6 +14,10 @@ func WriteMappedError(w http.ResponseWriter, status int, err error) {
 	lower := strings.ToLower(message)
 	code := ErrInvalidRequest
 	switch {
+	case strings.Contains(lower, "token expired"):
+		code = ErrTokenExpired
+	case strings.Contains(lower, "token already used"):
+		code = ErrTokenUsed
 	case strings.Contains(lower, "not found") && strings.Contains(lower, "match"):
 		code = ErrMatchNotFound
 	case strings.Contains(lower, "session not found"):

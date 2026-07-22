@@ -13,16 +13,21 @@ const (
 )
 
 type User struct {
-	ID               string    `json:"id"`
-	Email            string    `json:"email"`
-	Username         string    `json:"username"`
-	DisplayName      string    `json:"displayName"`
-	HiddenFromPublic bool      `json:"hiddenFromPublic"`
-	PasswordHash     string    `json:"-"`
-	Role             string    `json:"role"`
-	EmailVerified    bool      `json:"emailVerified"`
-	KYCStatus        string    `json:"kycStatus"`
-	CreatedAt        time.Time `json:"createdAt"`
+	ID               string     `json:"id"`
+	Email            string     `json:"email"`
+	Country          string     `json:"country"`
+	DateOfBirth      *time.Time `json:"dateOfBirth,omitempty"`
+	TermsAcceptedAt  *time.Time `json:"termsAcceptedAt,omitempty"`
+	Username         string     `json:"username"`
+	DisplayName      string     `json:"displayName"`
+	HiddenFromPublic bool       `json:"hiddenFromPublic"`
+	PasswordHash     string     `json:"-"`
+	Role             string     `json:"role"`
+	EmailVerified    bool       `json:"emailVerified"`
+	KYCStatus        string     `json:"kycStatus"`
+	Status           string     `json:"status"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
 }
 
 func RoleRank(role string) int {
@@ -52,6 +57,8 @@ func NewUser(id, email, passwordHash string) *User {
 		Role:          RolePlayer,
 		EmailVerified: false,
 		KYCStatus:     "unverified",
+		Status:        "active",
 		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
 	}
 }

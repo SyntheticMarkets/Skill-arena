@@ -30,6 +30,12 @@ artifacts/
 # Skill Arena local runtime state
 backend/data/
 backend/backups/
+backend/.e2e-data/
+backend/.review-data/
+frontend/test-results/
+frontend/playwright-report/
+frontend/coverage/
+frontend/tsconfig.tsbuildinfo
 
 # Extracted reference app checkout; the zip remains versioned.
 sample app/stray-arrows/

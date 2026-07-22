@@ -2,6 +2,8 @@ package config
 
 import (
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -39,6 +41,11 @@ func Load() (*Config, error) {
 	}
 	if cfg.JWTSecret == "" {
 		return nil, errors.New("SKILL_ARENA_JWT_SECRET is required")
+	}
+	if cfg.Environment == "production" {
+		if err := validateProduction(cfg); err != nil {
+			return nil, err
+		}
 	}
 
 	return cfg, nil
@@ -165,7 +172,13 @@ type PlatformSettings struct {
 }
 
 type SecuritySettings struct {
-	PuzzleSecret string
+	PuzzleSecret      string
+	CookieSecure      bool
+	CookieDomain      string
+	AccessCookieName  string
+	RefreshCookieName string
+	AccessTTL         time.Duration
+	RefreshTTL        time.Duration
 }
 
 type EmailSettings struct {
@@ -318,10 +331,16 @@ func LoadRuntimeSettings() *RuntimeSettings {
 			LaunchPhase: strings.ToUpper(envString("SKILL_ARENA_LAUNCH_PHASE", "PRE_LAUNCH")),
 		},
 		Security: SecuritySettings{
-			PuzzleSecret: envString("SKILL_ARENA_PUZZLE_SECRET", envString("SKILL_ARENA_JWT_SECRET", "local-development-puzzle-secret")),
+			PuzzleSecret:      envString("SKILL_ARENA_PUZZLE_SECRET", envString("SKILL_ARENA_JWT_SECRET", "local-development-puzzle-secret")),
+			CookieSecure:      envBool("SKILL_ARENA_COOKIE_SECURE", false),
+			CookieDomain:      envString("SKILL_ARENA_COOKIE_DOMAIN", ""),
+			AccessCookieName:  envString("SKILL_ARENA_ACCESS_COOKIE", "sa_access"),
+			RefreshCookieName: envString("SKILL_ARENA_REFRESH_COOKIE", "sa_refresh"),
+			AccessTTL:         time.Duration(envInt("SKILL_ARENA_ACCESS_TTL_MINUTES", 15)) * time.Minute,
+			RefreshTTL:        time.Duration(envInt("SKILL_ARENA_REFRESH_TTL_DAYS", 30)) * 24 * time.Hour,
 		},
 		Email: EmailSettings{
-			BaseURL:    envString("SKILL_ARENA_PUBLIC_BASE_URL", "http://localhost:5173"),
+			BaseURL:    envString("SKILL_ARENA_PUBLIC_BASE_URL", "http://localhost:3000"),
 			From:       envString("SKILL_ARENA_EMAIL_FROM", "no-reply@skillarena.local"),
 			SMTPHost:   envString("SKILL_ARENA_SMTP_HOST", ""),
 			SMTPPort:   envInt("SKILL_ARENA_SMTP_PORT", 587),
@@ -356,6 +375,41 @@ func LoadRuntimeSettings() *RuntimeSettings {
 			AllowedOrigins: envList("SKILL_ARENA_ALLOWED_ORIGINS", []string{"http://localhost:3000", "http://localhost:5173"}),
 		},
 	}
+}
+
+func validateProduction(cfg *Config) error {
+	if len(cfg.JWTSecret) < 32 || strings.Contains(strings.ToLower(cfg.JWTSecret), "development") || cfg.JWTSecret == "test-secret" {
+		return errors.New("production SKILL_ARENA_JWT_SECRET must be at least 32 characters and must not be a development secret")
+	}
+	if len(cfg.Settings.MFA.EncryptionKey) < 32 {
+		return errors.New("production SKILL_ARENA_MFA_ENCRYPTION_KEY must be at least 32 characters")
+	}
+	if !cfg.Settings.Security.CookieSecure {
+		return errors.New("production requires SKILL_ARENA_COOKIE_SECURE=true")
+	}
+	publicURL, err := url.Parse(cfg.Settings.Email.BaseURL)
+	if err != nil || publicURL.Scheme != "https" || publicURL.Host == "" {
+		return errors.New("production SKILL_ARENA_PUBLIC_BASE_URL must be an absolute HTTPS URL")
+	}
+	if cfg.Settings.Email.OutboxOnly {
+		return errors.New("production requires SKILL_ARENA_EMAIL_OUTBOX_ONLY=false")
+	}
+	if cfg.Settings.Email.SMTPHost == "" || cfg.Settings.Email.SMTPPort <= 0 || cfg.Settings.Email.From == "" {
+		return errors.New("production SMTP host, port, and from address are required")
+	}
+	if cfg.RedisURL == "" {
+		return errors.New("SKILL_ARENA_REDIS_URL is required in production")
+	}
+	if len(cfg.Settings.CORS.AllowedOrigins) == 0 {
+		return errors.New("production CORS allowed origins are required")
+	}
+	for _, origin := range cfg.Settings.CORS.AllowedOrigins {
+		parsed, err := url.Parse(origin)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || strings.Contains(origin, "*") {
+			return fmt.Errorf("production CORS origin %q must be an explicit HTTPS origin", origin)
+		}
+	}
+	return nil
 }
 
 func (s *RuntimeSettings) FeatureEnabled(name string) bool {

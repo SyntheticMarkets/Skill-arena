@@ -37,7 +37,15 @@ func TestProductionConfigurationAcceptsExternalServiceURLs(t *testing.T) {
 	t.Setenv("SKILL_ARENA_ENV", "production")
 	t.Setenv("SKILL_ARENA_DATABASE_URL", "postgres://user:pass@localhost:5432/skillarena?sslmode=disable")
 	t.Setenv("SKILL_ARENA_REDIS_URL", "redis://localhost:6379")
-	t.Setenv("SKILL_ARENA_JWT_SECRET", "test-secret")
+	t.Setenv("SKILL_ARENA_JWT_SECRET", "production-test-jwt-secret-at-least-32-characters")
+	t.Setenv("SKILL_ARENA_MFA_ENCRYPTION_KEY", "production-test-mfa-key-at-least-32-characters")
+	t.Setenv("SKILL_ARENA_COOKIE_SECURE", "true")
+	t.Setenv("SKILL_ARENA_PUBLIC_BASE_URL", "https://arena.example.com")
+	t.Setenv("SKILL_ARENA_EMAIL_OUTBOX_ONLY", "false")
+	t.Setenv("SKILL_ARENA_SMTP_HOST", "smtp.example.com")
+	t.Setenv("SKILL_ARENA_SMTP_PORT", "587")
+	t.Setenv("SKILL_ARENA_EMAIL_FROM", "security@arena.example.com")
+	t.Setenv("SKILL_ARENA_ALLOWED_ORIGINS", "https://arena.example.com")
 
 	cfg, err := Load()
 	if err != nil {

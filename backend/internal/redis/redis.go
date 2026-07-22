@@ -19,6 +19,7 @@ type Client interface {
 	Del(context.Context, string) error
 	Lock(context.Context, string, time.Duration) (bool, error)
 	Unlock(context.Context, string) error
+	Allow(context.Context, string, int, time.Duration) (bool, error)
 	Health(context.Context) error
 }
 
@@ -105,6 +106,31 @@ func (c *MemoryClient) Unlock(ctx context.Context, key string) error {
 	return nil
 }
 
+func (c *MemoryClient) Allow(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if limit <= 0 || window <= 0 {
+		return false, errors.New("rate limit and window must be positive")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now().UTC()
+	item, ok := c.items[key]
+	if !ok || (!item.expiresAt.IsZero() && !item.expiresAt.After(now)) {
+		c.items[key] = memoryItem{value: "1", expiresAt: now.Add(window)}
+		return true, nil
+	}
+	count, err := strconv.Atoi(item.value)
+	if err != nil {
+		return false, err
+	}
+	count++
+	item.value = strconv.Itoa(count)
+	c.items[key] = item
+	return count <= limit, nil
+}
+
 func (c *MemoryClient) Health(ctx context.Context) error {
 	return ctx.Err()
 }
@@ -159,6 +185,22 @@ func (c NetworkClient) Lock(ctx context.Context, key string, ttl time.Duration) 
 
 func (c NetworkClient) Unlock(ctx context.Context, key string) error {
 	return c.Del(ctx, "lock:"+key)
+}
+
+func (c NetworkClient) Allow(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {
+	if limit <= 0 || window <= 0 {
+		return false, errors.New("rate limit and window must be positive")
+	}
+	const script = `local count = redis.call('INCR', KEYS[1]); if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]); end; return count`
+	value, err := c.command(ctx, "EVAL", script, "1", key, strconv.FormatInt(window.Milliseconds(), 10))
+	if err != nil {
+		return false, err
+	}
+	count, err := strconv.Atoi(value)
+	if err != nil {
+		return false, err
+	}
+	return count <= limit, nil
 }
 
 var errNil = errors.New("redis nil")

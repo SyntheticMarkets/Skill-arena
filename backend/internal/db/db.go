@@ -263,9 +263,11 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 			return nil, err
 		}
 		if !loaded {
-			if err := store.load(); err != nil {
-				_ = pg.Close()
-				return nil, err
+			if environment != "production" {
+				if err := store.load(); err != nil {
+					_ = pg.Close()
+					return nil, err
+				}
 			}
 			store.mu.Lock()
 			err = store.persistSnapshotLocked(ctx)
@@ -274,6 +276,10 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 				_ = pg.Close()
 				return nil, err
 			}
+		}
+		if err := store.migrateLegacyIdentitySnapshot(ctx); err != nil {
+			_ = pg.Close()
+			return nil, fmt.Errorf("migrate identity snapshot: %w", err)
 		}
 	} else {
 		if err := store.load(); err != nil {
@@ -740,7 +746,10 @@ CREATE TABLE IF NOT EXISTS financial_idempotency (
 );
 CREATE INDEX IF NOT EXISTS idx_financial_idempotency_user_operation ON financial_idempotency(user_id, operation, created_at DESC);
 `)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.initPostgresAuth(ctx)
 }
 
 func (s *Store) loadPostgresSnapshot(ctx context.Context) (bool, error) {
@@ -2633,6 +2642,9 @@ func (s *Store) SettleWithdrawal(ctx context.Context, actorID, withdrawalID, pro
 }
 
 func (s *Store) VerifyEmail(ctx context.Context, userID string) error {
+	if s.usesPostgresAuth() {
+		return s.pgVerifyEmail(ctx, userID)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -2699,6 +2711,9 @@ func (s *Store) RegisterDevice(ctx context.Context, userID, fingerprint, deviceN
 	if fingerprint == "" {
 		return nil, errors.New("device fingerprint is required")
 	}
+	if s.usesPostgresAuth() {
+		return s.pgRegisterDevice(ctx, userID, fingerprint, deviceName, osName, browser)
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2745,6 +2760,44 @@ func (s *Store) RegisterDevice(ctx context.Context, userID, fingerprint, deviceN
 		return nil, err
 	}
 	return device, nil
+}
+
+func (s *Store) ListDevices(ctx context.Context, userID string) ([]*models.Device, error) {
+	if s.usesPostgresAuth() {
+		return s.pgListDevices(ctx, userID)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]*models.Device, 0, len(s.devices[userID]))
+	for _, device := range s.devices[userID] {
+		copyDevice := *device
+		result = append(result, &copyDevice)
+	}
+	return result, nil
+}
+
+func (s *Store) RevokeDevice(ctx context.Context, userID, deviceID, actorID, ipAddress string) error {
+	if s.usesPostgresAuth() {
+		return s.pgRevokeDevice(ctx, userID, deviceID, actorID, ipAddress)
+	}
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, device := range s.devices[userID] {
+		if device.ID == deviceID {
+			device.RevokedAt = &now
+			for _, session := range s.auth {
+				if session.UserID == userID && session.DeviceID == deviceID && session.RevokedAt == nil {
+					session.RevokedAt = &now
+				}
+			}
+			if err := s.persistDevices(); err != nil {
+				return err
+			}
+			return s.persistAuthSessions()
+		}
+	}
+	return errors.New("device not found")
 }
 
 func (s *Store) GetDevicesByUserID(ctx context.Context, userID string) ([]*models.Device, error) {
@@ -3303,6 +3356,9 @@ func (s *Store) CreateAuthToken(ctx context.Context, userID, purpose, rawToken, 
 	if ttl <= 0 {
 		ttl = 30 * time.Minute
 	}
+	if s.usesPostgresAuth() {
+		return s.pgCreateAuthToken(ctx, userID, purpose, rawToken, ipAddress, ttl)
+	}
 	now := time.Now().UTC()
 	token := &models.AuthToken{
 		ID:        newUUID(),
@@ -3347,6 +3403,9 @@ func (s *Store) ConsumeAuthToken(ctx context.Context, purpose, rawToken, ipAddre
 	if purpose == "" || rawToken == "" {
 		return nil, nil, errors.New("purpose and token are required")
 	}
+	if s.usesPostgresAuth() {
+		return s.pgConsumeAuthToken(ctx, purpose, rawToken, ipAddress)
+	}
 	tokenHash := hashToken(rawToken)
 	now := time.Now().UTC()
 
@@ -3356,15 +3415,17 @@ func (s *Store) ConsumeAuthToken(ctx context.Context, purpose, rawToken, ipAddre
 		if token.Purpose != purpose || token.TokenHash != tokenHash {
 			continue
 		}
-		if token.UsedAt != nil {
-			return nil, nil, errors.New("token already used")
-		}
-		if !token.ExpiresAt.After(now) {
-			return nil, nil, errors.New("token expired")
-		}
 		user := s.users[token.UserID]
 		if user == nil {
 			return nil, nil, errors.New("user not found")
+		}
+		if token.UsedAt != nil {
+			copyToken := *token
+			copyUser := *user
+			return &copyToken, &copyUser, errors.New("token already used")
+		}
+		if !token.ExpiresAt.After(now) {
+			return nil, nil, errors.New("token expired")
 		}
 		token.UsedAt = &now
 		token.UsedIP = ipAddress
@@ -3387,12 +3448,55 @@ func (s *Store) ConsumeAuthToken(ctx context.Context, purpose, rawToken, ipAddre
 	return nil, nil, errors.New("token not found")
 }
 
+func (s *Store) InspectAuthToken(ctx context.Context, purpose, rawToken string) (*models.AuthToken, *models.User, error) {
+	if purpose == "" || rawToken == "" {
+		return nil, nil, errors.New("purpose and token are required")
+	}
+	if s.usesPostgresAuth() {
+		return s.pgInspectAuthToken(ctx, purpose, rawToken)
+	}
+	tokenHash := hashToken(rawToken)
+	now := time.Now().UTC()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, token := range s.authTokens {
+		if token.Purpose != purpose || token.TokenHash != tokenHash {
+			continue
+		}
+		if token.UsedAt != nil {
+			return nil, nil, errors.New("token already used")
+		}
+		if !token.ExpiresAt.After(now) {
+			return nil, nil, errors.New("token expired")
+		}
+		user := s.users[token.UserID]
+		if user == nil {
+			return nil, nil, errors.New("user not found")
+		}
+		copyToken := *token
+		copyUser := *user
+		return &copyToken, &copyUser, nil
+	}
+	return nil, nil, errors.New("token not found")
+}
+
 func (s *Store) CreateAuthSession(ctx context.Context, userID, refreshToken, userAgent, ipAddress string, ttl time.Duration) (*models.AuthSession, error) {
+	return s.CreateAuthSessionWithState(ctx, userID, refreshToken, userAgent, ipAddress, ttl, false, false)
+}
+
+func (s *Store) CreateAuthSessionWithState(ctx context.Context, userID, refreshToken, userAgent, ipAddress string, ttl time.Duration, mfaVerified, enrollmentOnly bool) (*models.AuthSession, error) {
+	return s.CreateAuthSessionForDevice(ctx, userID, refreshToken, userAgent, ipAddress, "", ttl, mfaVerified, enrollmentOnly)
+}
+
+func (s *Store) CreateAuthSessionForDevice(ctx context.Context, userID, refreshToken, userAgent, ipAddress, deviceID string, ttl time.Duration, mfaVerified, enrollmentOnly bool) (*models.AuthSession, error) {
 	if userID == "" || refreshToken == "" {
 		return nil, errors.New("user id and refresh token are required")
 	}
 	if ttl <= 0 {
 		ttl = 30 * 24 * time.Hour
+	}
+	if s.usesPostgresAuth() {
+		return s.pgCreateAuthSession(ctx, userID, refreshToken, userAgent, ipAddress, deviceID, ttl, mfaVerified, enrollmentOnly)
 	}
 
 	s.mu.Lock()
@@ -3408,9 +3512,13 @@ func (s *Store) CreateAuthSession(ctx context.Context, userID, refreshToken, use
 		RefreshTokenHash: hashToken(refreshToken),
 		UserAgent:        userAgent,
 		IPAddress:        ipAddress,
+		DeviceID:         deviceID,
 		CreatedAt:        time.Now().UTC(),
 		ExpiresAt:        time.Now().UTC().Add(ttl),
+		MFAVerified:      mfaVerified,
+		EnrollmentOnly:   enrollmentOnly,
 	}
+	session.FamilyID = session.ID
 	s.auth[session.ID] = session
 	s.audit = append(s.audit, &models.AuditLog{
 		ID:        newUUID(),
@@ -3441,12 +3549,35 @@ func (s *Store) RotateRefreshToken(ctx context.Context, oldRefreshToken, newRefr
 	}
 	oldHash := hashToken(oldRefreshToken)
 	now := time.Now().UTC()
+	if ttl <= 0 {
+		ttl = 30 * 24 * time.Hour
+	}
+	if s.usesPostgresAuth() {
+		return s.pgRotateRefreshToken(ctx, oldRefreshToken, newRefreshToken, userAgent, ipAddress, ttl)
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, session := range s.auth {
 		if session.RefreshTokenHash != oldHash {
 			continue
+		}
+		if session.RevokedAt != nil && session.RotatedAt != nil {
+			for _, related := range s.auth {
+				if (session.FamilyID != "" && related.FamilyID == session.FamilyID) || (session.FamilyID == "" && related.UserID == session.UserID) {
+					revokedAt := now
+					related.RevokedAt = &revokedAt
+					_ = s.redis.Del(ctx, "session:"+related.ID)
+				}
+			}
+			s.audit = append(s.audit, &models.AuditLog{ID: newUUID(), ActorID: session.UserID, Action: "auth.refresh.reuse_detected", TargetID: session.ID, IPAddress: ipAddress, CreatedAt: now})
+			if err := s.persistAuthSessions(); err != nil {
+				return nil, nil, err
+			}
+			if err := s.persistAuditLogs(); err != nil {
+				return nil, nil, err
+			}
+			return nil, nil, errors.New("refresh token reuse detected")
 		}
 		if session.RevokedAt != nil || !session.ExpiresAt.After(now) {
 			return nil, nil, errors.New("refresh token is expired or revoked")
@@ -3463,8 +3594,15 @@ func (s *Store) RotateRefreshToken(ctx context.Context, oldRefreshToken, newRefr
 			RefreshTokenHash: hashToken(newRefreshToken),
 			UserAgent:        userAgent,
 			IPAddress:        ipAddress,
+			DeviceID:         session.DeviceID,
+			FamilyID:         session.FamilyID,
 			CreatedAt:        now,
 			ExpiresAt:        now.Add(ttl),
+			MFAVerified:      session.MFAVerified,
+			EnrollmentOnly:   session.EnrollmentOnly,
+		}
+		if replacement.FamilyID == "" {
+			replacement.FamilyID = session.ID
 		}
 		s.auth[replacement.ID] = replacement
 		s.audit = append(s.audit, &models.AuditLog{
@@ -3494,6 +3632,9 @@ func (s *Store) RotateRefreshToken(ctx context.Context, oldRefreshToken, newRefr
 }
 
 func (s *Store) RevokeUserSessions(ctx context.Context, userID, actorID, ipAddress, reason string) error {
+	if s.usesPostgresAuth() {
+		return s.pgRevokeUserSessions(ctx, userID, actorID, ipAddress, reason)
+	}
 	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3523,6 +3664,15 @@ func (s *Store) RevokeUserSessions(ctx context.Context, userID, actorID, ipAddre
 }
 
 func (s *Store) GetUserByRefreshToken(ctx context.Context, refreshToken string) (*models.User, *models.AuthSession, error) {
+	if s.usesPostgresAuth() {
+		tokenHash := hashToken(refreshToken)
+		session, err := scanAuthSession(s.pg.QueryRowContext(ctx, `SELECT `+authSessionColumns+` FROM auth_sessions WHERE refresh_token_hash=$1`, tokenHash))
+		if err != nil || session.RevokedAt != nil || !session.ExpiresAt.After(time.Now().UTC()) {
+			return nil, nil, errors.New("refresh token is expired or revoked")
+		}
+		user, err := s.pgGetUserByID(ctx, session.UserID)
+		return user, session, err
+	}
 	tokenHash := hashToken(refreshToken)
 	now := time.Now().UTC()
 
@@ -3546,6 +3696,9 @@ func (s *Store) GetUserByRefreshToken(ctx context.Context, refreshToken string) 
 }
 
 func (s *Store) RevokeRefreshToken(ctx context.Context, refreshToken, actorID, ipAddress string) error {
+	if s.usesPostgresAuth() {
+		return s.pgRevokeRefreshToken(ctx, refreshToken, actorID, ipAddress)
+	}
 	tokenHash := hashToken(refreshToken)
 	now := time.Now().UTC()
 
@@ -3574,7 +3727,80 @@ func (s *Store) RevokeRefreshToken(ctx context.Context, refreshToken, actorID, i
 	return errors.New("refresh token not found")
 }
 
+func (s *Store) ValidateAuthSession(ctx context.Context, sessionID, userID string) (*models.AuthSession, *models.User, error) {
+	if sessionID == "" || userID == "" {
+		return nil, nil, errors.New("session is required")
+	}
+	if s.usesPostgresAuth() {
+		return s.pgValidateAuthSession(ctx, sessionID, userID)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	session := s.auth[sessionID]
+	if session == nil || session.UserID != userID || session.RevokedAt != nil || !session.ExpiresAt.After(time.Now().UTC()) {
+		return nil, nil, errors.New("session is expired or revoked")
+	}
+	user := s.users[userID]
+	if user == nil || (user.Status != "" && user.Status != "active") {
+		return nil, nil, errors.New("account is not active")
+	}
+	copySession := *session
+	copyUser := *user
+	return &copySession, &copyUser, nil
+}
+
+func (s *Store) ListAuthSessions(ctx context.Context, userID string) ([]*models.AuthSession, error) {
+	if s.usesPostgresAuth() {
+		return s.pgListAuthSessions(ctx, userID)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := []*models.AuthSession{}
+	for _, session := range s.auth {
+		if session.UserID == userID {
+			copySession := *session
+			result = append(result, &copySession)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
+	return result, nil
+}
+
+func (s *Store) MarkSessionMFA(ctx context.Context, sessionID, userID string, verified, enrollmentOnly bool) error {
+	if s.usesPostgresAuth() {
+		return s.pgMarkSessionMFA(ctx, sessionID, userID, verified, enrollmentOnly)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session := s.auth[sessionID]
+	if session == nil || session.UserID != userID || session.RevokedAt != nil {
+		return errors.New("session not found")
+	}
+	session.MFAVerified = verified
+	session.EnrollmentOnly = enrollmentOnly
+	return s.persistAuthSessions()
+}
+
+func (s *Store) RevokeAuthSession(ctx context.Context, sessionID, userID, actorID, ipAddress, reason string) error {
+	if s.usesPostgresAuth() {
+		return s.pgRevokeSession(ctx, sessionID, userID, actorID, ipAddress, reason)
+	}
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session := s.auth[sessionID]
+	if session == nil || session.UserID != userID {
+		return errors.New("session not found")
+	}
+	session.RevokedAt = &now
+	_ = s.redis.Del(ctx, "session:"+session.ID)
+	return s.persistAuthSessions()
+}
+
 func (s *Store) LoginSecurityState(ctx context.Context, userID string) (*models.LoginSecurityState, error) {
+	if s.usesPostgresAuth() {
+		return s.pgLoginSecurityState(ctx, userID)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state := s.loginSecurity[userID]
@@ -3588,6 +3814,9 @@ func (s *Store) LoginSecurityState(ctx context.Context, userID string) (*models.
 }
 
 func (s *Store) RecordLoginFailure(ctx context.Context, userID, ipAddress, userAgent string) (*models.LoginSecurityState, error) {
+	if s.usesPostgresAuth() {
+		return s.pgRecordLoginFailure(ctx, userID, ipAddress, userAgent)
+	}
 	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3623,6 +3852,9 @@ func (s *Store) RecordLoginFailure(ctx context.Context, userID, ipAddress, userA
 }
 
 func (s *Store) RecordLoginSuccess(ctx context.Context, userID, ipAddress, userAgent string) error {
+	if s.usesPostgresAuth() {
+		return s.pgRecordLoginSuccess(ctx, userID, ipAddress, userAgent)
+	}
 	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3656,6 +3888,9 @@ func (s *Store) RecordLoginSuccess(ctx context.Context, userID, ipAddress, userA
 }
 
 func (s *Store) UpdatePassword(ctx context.Context, userID, passwordHash, passwordStamp, ipAddress string) error {
+	if s.usesPostgresAuth() {
+		return s.pgUpdatePassword(ctx, userID, passwordHash, passwordStamp, ipAddress)
+	}
 	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3690,13 +3925,78 @@ func (s *Store) UpdatePassword(ctx context.Context, userID, passwordHash, passwo
 	return s.persistAuditLogs()
 }
 
+func (s *Store) CompletePasswordReset(ctx context.Context, rawToken, passwordHash, ipAddress string) error {
+	if rawToken == "" || passwordHash == "" {
+		return errors.New("token and password hash are required")
+	}
+	if s.usesPostgresAuth() {
+		return s.pgCompletePasswordReset(ctx, rawToken, passwordHash, ipAddress)
+	}
+	now := time.Now().UTC()
+	tokenHash := hashToken(rawToken)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var token *models.AuthToken
+	for _, candidate := range s.authTokens {
+		if candidate.Purpose == models.AuthTokenPurposePasswordReset && candidate.TokenHash == tokenHash {
+			token = candidate
+			break
+		}
+	}
+	if token == nil {
+		return errors.New("token not found")
+	}
+	if token.UsedAt != nil {
+		return errors.New("token already used")
+	}
+	if !token.ExpiresAt.After(now) {
+		return errors.New("token expired")
+	}
+	user := s.users[token.UserID]
+	if user == nil {
+		return errors.New("user not found")
+	}
+	token.UsedAt = &now
+	token.UsedIP = ipAddress
+	user.PasswordHash = passwordHash
+	user.UpdatedAt = now
+	s.passwords[user.ID] = append(s.passwords[user.ID], &models.PasswordHistoryEntry{UserID: user.ID, PasswordHash: passwordHash, CreatedAt: now})
+	if len(s.passwords[user.ID]) > 5 {
+		s.passwords[user.ID] = s.passwords[user.ID][len(s.passwords[user.ID])-5:]
+	}
+	for _, session := range s.auth {
+		if session.UserID == user.ID && session.RevokedAt == nil {
+			revokedAt := now
+			session.RevokedAt = &revokedAt
+		}
+	}
+	s.audit = append(s.audit,
+		&models.AuditLog{ID: newUUID(), ActorID: user.ID, Action: "auth.token.consumed." + models.AuthTokenPurposePasswordReset, TargetID: token.ID, IPAddress: ipAddress, CreatedAt: now},
+		&models.AuditLog{ID: newUUID(), ActorID: user.ID, Action: "auth.password.reset", TargetID: user.ID, IPAddress: ipAddress, CreatedAt: now},
+		&models.AuditLog{ID: newUUID(), ActorID: user.ID, Action: "auth.sessions.revoked", TargetID: user.ID, IPAddress: ipAddress, Metadata: map[string]string{"reason": "password_reset"}, CreatedAt: now},
+	)
+	if err := s.persistUsers(); err != nil {
+		return err
+	}
+	if err := s.persistAuthHardening(); err != nil {
+		return err
+	}
+	return s.persistAuditLogs()
+}
+
 func (s *Store) PasswordHistory(ctx context.Context, userID string) ([]*models.PasswordHistoryEntry, error) {
+	if s.usesPostgresAuth() {
+		return s.pgPasswordHistory(ctx, userID)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return append([]*models.PasswordHistoryEntry(nil), s.passwords[userID]...), nil
 }
 
 func (s *Store) GetMFASettings(ctx context.Context, userID string) (*models.MFASettings, error) {
+	if s.usesPostgresAuth() {
+		return s.pgGetMFASettings(ctx, userID)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	setting := s.mfa[userID]
@@ -3711,6 +4011,9 @@ func (s *Store) GetMFASettings(ctx context.Context, userID string) (*models.MFAS
 func (s *Store) SaveMFASettings(ctx context.Context, setting *models.MFASettings, actorID, ipAddress string) error {
 	if setting == nil || setting.UserID == "" {
 		return errors.New("mfa setting requires user id")
+	}
+	if s.usesPostgresAuth() {
+		return s.pgSaveMFASettings(ctx, setting, actorID, ipAddress)
 	}
 	now := time.Now().UTC()
 	setting.UpdatedAt = now
@@ -3733,6 +4036,9 @@ func (s *Store) SaveMFASettings(ctx context.Context, setting *models.MFASettings
 }
 
 func (s *Store) ConsumeRecoveryCode(ctx context.Context, userID, codeHash, ipAddress string) (bool, error) {
+	if s.usesPostgresAuth() {
+		return s.pgConsumeRecoveryCode(ctx, userID, codeHash, ipAddress)
+	}
 	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3771,6 +4077,9 @@ func (s *Store) ConsumeRecoveryCode(ctx context.Context, userID, codeHash, ipAdd
 }
 
 func (s *Store) AppendAuditLog(ctx context.Context, actorID, action, targetID, ipAddress string, metadata map[string]string) error {
+	if s.usesPostgresAuth() {
+		return s.pgAppendAudit(ctx, actorID, action, targetID, ipAddress, metadata)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -3789,6 +4098,9 @@ func (s *Store) AppendAuditLog(ctx context.Context, actorID, action, targetID, i
 func (s *Store) GetAuditLogs(ctx context.Context, limit int) ([]*models.AuditLog, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 100
+	}
+	if s.usesPostgresAuth() {
+		return s.pgGetAuditLogs(ctx, limit)
 	}
 
 	s.mu.RLock()
@@ -3889,10 +4201,16 @@ func (s *Store) DataDir() string {
 	return s.dataDir
 }
 
-func (s *Store) Redis() saredis.Client {
-	if s.redis == nil {
-		return saredis.NewMemoryClient()
+func (s *Store) ConfigureRuntime(settings *config.RuntimeSettings) {
+	if settings == nil {
+		return
 	}
+	s.mu.Lock()
+	s.settings = settings
+	s.mu.Unlock()
+}
+
+func (s *Store) Redis() saredis.Client {
 	return s.redis
 }
 
@@ -4374,12 +4692,16 @@ func dirSizeBestEffort(path string) int64 {
 }
 
 func (s *Store) CreateUser(ctx context.Context, user *models.User) error {
+	if user == nil {
+		return errors.New("user is required")
+	}
+	if s.usesPostgresAuth() {
+		return s.pgCreateUser(ctx, user)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if user.ID == "" {
-		user.ID = newUUID()
-	}
+	normalizeNewUser(user)
 	for _, existing := range s.users {
 		if existing.Email == user.Email {
 			if existing.PasswordHash == "" && user.PasswordHash != "" {
@@ -4482,6 +4804,9 @@ func (s *Store) CreateUser(ctx context.Context, user *models.User) error {
 }
 
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
+	if s.usesPostgresAuth() {
+		return s.pgGetUserByEmail(ctx, email)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -4494,6 +4819,9 @@ func (s *Store) GetUserByEmail(ctx context.Context, email string) (*models.User,
 }
 
 func (s *Store) GetUserByID(ctx context.Context, userID string) (*models.User, error) {
+	if s.usesPostgresAuth() {
+		return s.pgGetUserByID(ctx, userID)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

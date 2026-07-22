@@ -12,9 +12,11 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -37,10 +39,20 @@ type authRequest struct {
 	RecoveryCode string `json:"recoveryCode,omitempty"`
 }
 
+type registrationRequest struct {
+	Email          string `json:"email"`
+	Password       string `json:"password"`
+	Country        string `json:"country"`
+	DateOfBirth    string `json:"dateOfBirth"`
+	AcceptTerms    bool   `json:"acceptTerms"`
+	AcceptFairPlay bool   `json:"acceptFairPlay"`
+}
+
 type tokenResponse struct {
-	Token        string `json:"token"`
-	RefreshToken string `json:"refreshToken"`
-	ExpiresIn    int64  `json:"expiresIn"`
+	Authenticated         bool         `json:"authenticated"`
+	MFAEnrollmentRequired bool         `json:"mfaEnrollmentRequired,omitempty"`
+	ExpiresIn             int64        `json:"expiresIn"`
+	User                  *models.User `json:"user"`
 }
 
 type mfaRequiredResponse struct {
@@ -71,12 +83,49 @@ type mfaConfirmRequest struct {
 	Code string `json:"code"`
 }
 
+type mfaChallengeRequest struct {
+	ChallengeToken string `json:"challengeToken"`
+	Code           string `json:"code,omitempty"`
+	RecoveryCode   string `json:"recoveryCode,omitempty"`
+}
+
+type mfaDisableRequest struct {
+	Password     string `json:"password"`
+	Code         string `json:"code,omitempty"`
+	RecoveryCode string `json:"recoveryCode,omitempty"`
+}
+
+type sessionRevokeRequest struct {
+	SessionID string `json:"sessionId"`
+}
+
+type deviceRevokeRequest struct {
+	DeviceID string `json:"deviceId"`
+}
+
+type publicSession struct {
+	ID          string     `json:"id"`
+	UserAgent   string     `json:"userAgent,omitempty"`
+	IPAddress   string     `json:"ipAddress,omitempty"`
+	DeviceID    string     `json:"deviceId,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	ExpiresAt   time.Time  `json:"expiresAt"`
+	RevokedAt   *time.Time `json:"revokedAt,omitempty"`
+	Current     bool       `json:"current"`
+	MFAVerified bool       `json:"mfaVerified"`
+}
+
 type deviceRegisterRequest struct {
 	Fingerprint string `json:"fingerprint"`
 	DeviceName  string `json:"deviceName,omitempty"`
 	OS          string `json:"os,omitempty"`
 	Browser     string `json:"browser,omitempty"`
 }
+
+var dummyPasswordHash = func() []byte {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("timing-equalization-only"), bcrypt.DefaultCost)
+	return hash
+}()
 
 func passwordPolicyError(password string) string {
 	if len(password) < 12 {
@@ -100,18 +149,14 @@ func passwordPolicyError(password string) string {
 }
 
 func clientIP(r *http.Request) string {
-	forwarded := r.Header.Get("X-Forwarded-For")
-	if forwarded != "" {
-		return strings.TrimSpace(strings.Split(forwarded, ",")[0])
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
 	}
 	return r.RemoteAddr
 }
 
-func signAccessToken(user *models.User, cfg *config.Config) (string, error) {
-	return signAccessTokenWithMFAState(user, cfg, false, false)
-}
-
-func signAccessTokenWithMFAState(user *models.User, cfg *config.Config, mfaVerified, enrollmentOnly bool) (string, error) {
+func signAccessToken(user *models.User, session *models.AuthSession, cfg *config.Config) (string, error) {
 	role := user.Role
 	for _, email := range cfg.Settings.Admin.SuperAdminEmails {
 		if strings.EqualFold(strings.TrimSpace(email), strings.TrimSpace(user.Email)) {
@@ -121,18 +166,41 @@ func signAccessTokenWithMFAState(user *models.User, cfg *config.Config, mfaVerif
 	}
 	claims := jwt.MapClaims{
 		"sub":  user.ID,
+		"sid":  session.ID,
+		"jti":  db.NewAuthToken(),
 		"role": role,
 		"typ":  "access",
-		"exp":  time.Now().Add(15 * time.Minute).Unix(),
+		"iss":  "skill-arena-api",
+		"aud":  "skill-arena-web",
+		"iat":  time.Now().UTC().Unix(),
+		"exp":  time.Now().Add(cfg.Settings.Security.AccessTTL).Unix(),
 	}
-	if mfaVerified {
+	if session.MFAVerified {
 		claims["mfaVerified"] = true
 	}
-	if enrollmentOnly {
+	if session.EnrollmentOnly {
 		claims["mfaEnrollmentOnly"] = true
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(cfg.JWTSecret))
+}
+
+func authCookie(cfg *config.Config, name, value, path string, maxAge int) *http.Cookie {
+	return &http.Cookie{
+		Name: name, Value: value, Path: path, Domain: cfg.Settings.Security.CookieDomain,
+		MaxAge: maxAge, HttpOnly: true, Secure: cfg.Settings.Security.CookieSecure,
+		SameSite: http.SameSiteStrictMode,
+	}
+}
+
+func setSessionCookies(w http.ResponseWriter, cfg *config.Config, accessToken, refreshToken string) {
+	http.SetCookie(w, authCookie(cfg, cfg.Settings.Security.AccessCookieName, accessToken, "/", int(cfg.Settings.Security.AccessTTL.Seconds())))
+	http.SetCookie(w, authCookie(cfg, cfg.Settings.Security.RefreshCookieName, refreshToken, "/api/v1/auth", int(cfg.Settings.Security.RefreshTTL.Seconds())))
+}
+
+func clearSessionCookies(w http.ResponseWriter, cfg *config.Config) {
+	http.SetCookie(w, authCookie(cfg, cfg.Settings.Security.AccessCookieName, "", "/", -1))
+	http.SetCookie(w, authCookie(cfg, cfg.Settings.Security.RefreshCookieName, "", "/api/v1/auth", -1))
 }
 
 func privilegedRole(role string) bool {
@@ -151,13 +219,50 @@ func tokenLink(baseURL, path, token string) string {
 	return u.String()
 }
 
-func enqueueEmail(ctx context.Context, store *db.Store, to, subject, link, template string) {
-	_, _ = store.EnqueueJob(ctx, models.JobEmailSend, map[string]string{
+func newSignedAuthToken(cfg *config.Config, purpose string, ttl time.Duration) (string, error) {
+	nonce, err := randomBase32(32)
+	if err != nil {
+		return "", err
+	}
+	expires := strconv.FormatInt(time.Now().UTC().Add(ttl).Unix(), 10)
+	mac := hmac.New(sha256.New, []byte(cfg.JWTSecret))
+	_, _ = mac.Write([]byte(purpose + "\x00" + nonce + "\x00" + expires))
+	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return nonce + "." + expires + "." + signature, nil
+}
+
+func verifySignedAuthToken(cfg *config.Config, purpose, token string) error {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return errors.New("token not found")
+	}
+	expires, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return errors.New("token not found")
+	}
+	if time.Now().UTC().Unix() >= expires {
+		return errors.New("token expired")
+	}
+	provided, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return errors.New("token not found")
+	}
+	mac := hmac.New(sha256.New, []byte(cfg.JWTSecret))
+	_, _ = mac.Write([]byte(purpose + "\x00" + parts[0] + "\x00" + parts[1]))
+	if !hmac.Equal(provided, mac.Sum(nil)) {
+		return errors.New("token not found")
+	}
+	return nil
+}
+
+func enqueueEmail(ctx context.Context, store *db.Store, to, subject, link, template string) error {
+	_, err := store.EnqueueJob(ctx, models.JobEmailSend, map[string]string{
 		"to":       to,
 		"subject":  subject,
 		"link":     link,
 		"template": template,
 	}, time.Now().UTC())
+	return err
 }
 
 func sha256Hex(value string) string {
@@ -262,66 +367,111 @@ func verifyTOTP(secret, code string, now time.Time) bool {
 }
 
 func issueSession(w http.ResponseWriter, r *http.Request, store *db.Store, cfg *config.Config, user *models.User, mfaVerified, enrollmentOnly bool) {
-	signed, err := signAccessTokenWithMFAState(user, cfg, mfaVerified, enrollmentOnly)
+	refreshToken := db.NewRefreshToken()
+	deviceID := ""
+	if fingerprint := strings.TrimSpace(r.Header.Get("X-Device-Fingerprint")); fingerprint != "" {
+		device, err := store.RegisterDevice(r.Context(), user.ID, fingerprint, r.Header.Get("X-Device-Name"), r.Header.Get("X-Device-OS"), r.Header.Get("X-Device-Browser"))
+		if err != nil {
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to register device")
+			return
+		}
+		deviceID = device.ID
+	}
+	session, err := store.CreateAuthSessionForDevice(r.Context(), user.ID, refreshToken, r.UserAgent(), clientIP(r), deviceID, cfg.Settings.Security.RefreshTTL, mfaVerified, enrollmentOnly)
 	if err != nil {
-		http.Error(w, "failed to sign token", http.StatusInternalServerError)
+		WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to create session")
 		return
 	}
-	refreshToken := db.NewRefreshToken()
-	if _, err := store.CreateAuthSession(r.Context(), user.ID, refreshToken, r.UserAgent(), clientIP(r), 30*24*time.Hour); err != nil {
-		http.Error(w, "failed to create session", http.StatusInternalServerError)
+	signed, err := signAccessToken(user, session, cfg)
+	if err != nil {
+		WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to sign token")
 		return
 	}
 	_ = store.RecordLoginSuccess(r.Context(), user.ID, clientIP(r), r.UserAgent())
 	_ = store.AppendAuditLog(r.Context(), user.ID, "auth.login.succeeded", user.ID, clientIP(r), map[string]string{"userAgent": r.UserAgent()})
 
 	w.Header().Set("Content-Type", "application/json")
+	setSessionCookies(w, cfg, signed, refreshToken)
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(tokenResponse{Token: signed, RefreshToken: refreshToken, ExpiresIn: int64((15 * time.Minute).Seconds())})
+	json.NewEncoder(w).Encode(tokenResponse{Authenticated: true, MFAEnrollmentRequired: enrollmentOnly, User: user, ExpiresIn: int64(cfg.Settings.Security.AccessTTL.Seconds())})
 }
 
-func RegisterHandler(store *db.Store) http.HandlerFunc {
+func adultOn(date time.Time, now time.Time) bool {
+	eighteenth := date.AddDate(18, 0, 0)
+	return !eighteenth.After(now)
+}
+
+func RegisterHandler(store *db.Store, cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
 
-		var req authRequest
+		var req registrationRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request payload", http.StatusBadRequest)
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "invalid request payload")
 			return
 		}
 
-		if req.Email == "" || req.Password == "" {
-			http.Error(w, "email and password are required", http.StatusBadRequest)
+		req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+		req.Country = strings.ToUpper(strings.TrimSpace(req.Country))
+		if req.Email == "" || req.Password == "" || len(req.Country) != 2 {
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "email, password, and ISO country code are required")
+			return
+		}
+		birthDate, err := time.Parse("2006-01-02", req.DateOfBirth)
+		if err != nil || !adultOn(birthDate, time.Now().UTC()) {
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "you must be at least 18 years old")
+			return
+		}
+		if !req.AcceptTerms || !req.AcceptFairPlay {
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "terms and fair play rules must be accepted")
 			return
 		}
 		if policyErr := passwordPolicyError(req.Password); policyErr != "" {
-			http.Error(w, policyErr, http.StatusBadRequest)
+			WriteAPIError(w, http.StatusBadRequest, ErrPasswordPolicy, policyErr)
 			return
 		}
 
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 		if err != nil {
-			http.Error(w, "failed to secure password", http.StatusInternalServerError)
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to secure password")
 			return
 		}
 
 		user := models.NewUser("", req.Email, string(hash))
+		acceptedAt := time.Now().UTC()
+		user.Country = req.Country
+		user.DateOfBirth = &birthDate
+		user.TermsAcceptedAt = &acceptedAt
 		if err := store.CreateUser(r.Context(), user); err != nil {
-			http.Error(w, fmt.Sprintf("failed to create user: %v", err), http.StatusInternalServerError)
+			if strings.Contains(strings.ToLower(err.Error()), "exists") {
+				WriteAPIError(w, http.StatusConflict, ErrConflict, "an account already exists for this email")
+				return
+			}
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to create account")
 			return
 		}
 		_ = store.AppendAuditLog(r.Context(), user.ID, "auth.user.registered", user.ID, clientIP(r), nil)
-		rawToken := db.NewAuthToken()
-		if _, err := store.CreateAuthToken(r.Context(), user.ID, models.AuthTokenPurposeEmailVerification, rawToken, clientIP(r), 24*time.Hour); err == nil {
-			enqueueEmail(r.Context(), store, user.Email, "Verify your Skill Arena email", tokenLink(config.Runtime().Email.BaseURL, "/verify-email", rawToken), "email_verification")
+		rawToken, err := newSignedAuthToken(cfg, models.AuthTokenPurposeEmailVerification, 24*time.Hour)
+		if err != nil {
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to create verification token")
+			return
+		}
+		if _, err := store.CreateAuthToken(r.Context(), user.ID, models.AuthTokenPurposeEmailVerification, rawToken, clientIP(r), 24*time.Hour); err != nil {
+			WriteAPIError(w, http.StatusServiceUnavailable, ErrInternal, "verification delivery is temporarily unavailable")
+			return
+		}
+		if err := enqueueEmail(r.Context(), store, user.Email, "Verify your Skill Arena email", tokenLink(cfg.Settings.Email.BaseURL, "/auth/verify-email", rawToken), "email_verification"); err != nil {
+			_ = store.AppendAuditLog(r.Context(), user.ID, "auth.email.delivery_failed", user.ID, clientIP(r), map[string]string{"template": "email_verification"})
+			WriteAPIError(w, http.StatusServiceUnavailable, ErrInternal, "verification delivery is temporarily unavailable")
+			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(user)
+		json.NewEncoder(w).Encode(map[string]any{"status": "verification_required", "email": user.Email})
 	}
 }
 
@@ -334,25 +484,35 @@ func LoginHandler(store *db.Store, cfg *config.Config) http.HandlerFunc {
 
 		var req authRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request payload", http.StatusBadRequest)
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "invalid request payload")
 			return
 		}
 
-		user, err := store.GetUserByEmail(r.Context(), req.Email)
+		user, err := store.GetUserByEmail(r.Context(), strings.ToLower(strings.TrimSpace(req.Email)))
 		if err != nil {
-			http.Error(w, "invalid credentials", http.StatusUnauthorized)
+			_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(req.Password))
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "invalid email or password")
+			return
+		}
+		if user.Status != "" && user.Status != "active" {
+			WriteAPIError(w, http.StatusForbidden, ErrForbidden, "account is not active")
 			return
 		}
 		state, _ := store.LoginSecurityState(r.Context(), user.ID)
 		if state.LockedUntil != nil && state.LockedUntil.After(time.Now().UTC()) {
 			_ = store.AppendAuditLog(r.Context(), user.ID, "auth.login.locked", user.ID, clientIP(r), nil)
-			http.Error(w, "account temporarily locked", http.StatusLocked)
+			WriteAPIError(w, http.StatusLocked, ErrAccountLocked, "account temporarily locked")
 			return
 		}
 
 		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
 			_, _ = store.RecordLoginFailure(r.Context(), user.ID, clientIP(r), r.UserAgent())
-			http.Error(w, "invalid credentials", http.StatusUnauthorized)
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "invalid email or password")
+			return
+		}
+		if !user.EmailVerified {
+			_ = store.AppendAuditLog(r.Context(), user.ID, "auth.login.email_unverified", user.ID, clientIP(r), nil)
+			WriteAPIError(w, http.StatusForbidden, ErrEmailUnverified, "verify your email before signing in")
 			return
 		}
 
@@ -362,29 +522,74 @@ func LoginHandler(store *db.Store, cfg *config.Config) http.HandlerFunc {
 			enrollmentOnly = true
 			_ = store.AppendAuditLog(r.Context(), user.ID, "auth.mfa.enrollment_required", user.ID, clientIP(r), nil)
 		}
-		mfaRequired := mfa.Enabled
-		mfaVerified := false
-		if mfaRequired {
-			if req.MFACode != "" && mfa.Enabled && mfa.TOTPSecretCiphertext != "" {
-				if secret, err := openSecret(mfa.TOTPSecretCiphertext, cfg); err == nil {
-					mfaVerified = verifyTOTP(secret, req.MFACode, time.Now().UTC())
-				}
+		if mfa.Enabled {
+			rawChallenge, err := newSignedAuthToken(cfg, models.AuthTokenPurposeMFAChallenge, 5*time.Minute)
+			if err != nil {
+				WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to create MFA challenge")
+				return
 			}
-			if !mfaVerified && req.RecoveryCode != "" {
-				used, _ := store.ConsumeRecoveryCode(r.Context(), user.ID, sha256Hex(req.RecoveryCode), clientIP(r))
-				mfaVerified = used
+			if _, err := store.CreateAuthToken(r.Context(), user.ID, models.AuthTokenPurposeMFAChallenge, rawChallenge, clientIP(r), 5*time.Minute); err != nil {
+				WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to create MFA challenge")
+				return
 			}
-			if !mfaVerified {
-				rawChallenge := db.NewAuthToken()
-				_, _ = store.CreateAuthToken(r.Context(), user.ID, models.AuthTokenPurposeMFAChallenge, rawChallenge, clientIP(r), 5*time.Minute)
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusAccepted)
-				json.NewEncoder(w).Encode(mfaRequiredResponse{MFARequired: true, Challenge: rawChallenge, ExpiresIn: int64((5 * time.Minute).Seconds())})
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(mfaRequiredResponse{MFARequired: true, Challenge: rawChallenge, ExpiresIn: int64((5 * time.Minute).Seconds())})
+			return
+		}
+
+		issueSession(w, r, store, cfg, user, false, enrollmentOnly)
+	}
+}
+
+func MFAChallengeHandler(store *db.Store, cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req mfaChallengeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ChallengeToken == "" {
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "challengeToken and an MFA code are required")
+			return
+		}
+		if err := verifySignedAuthToken(cfg, models.AuthTokenPurposeMFAChallenge, req.ChallengeToken); err != nil {
+			WriteMappedError(w, http.StatusUnauthorized, err)
+			return
+		}
+		_, user, err := store.InspectAuthToken(r.Context(), models.AuthTokenPurposeMFAChallenge, req.ChallengeToken)
+		if err != nil {
+			WriteMappedError(w, http.StatusUnauthorized, err)
+			return
+		}
+		setting, err := store.GetMFASettings(r.Context(), user.ID)
+		if err != nil || !setting.Enabled {
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "MFA is not configured")
+			return
+		}
+		verified := false
+		if req.Code != "" && setting.TOTPSecretCiphertext != "" {
+			if secret, err := openSecret(setting.TOTPSecretCiphertext, cfg); err == nil {
+				verified = verifyTOTP(secret, req.Code, time.Now().UTC())
+			}
+		}
+		if !verified && req.RecoveryCode != "" {
+			verified, err = store.ConsumeRecoveryCode(r.Context(), user.ID, sha256Hex(strings.TrimSpace(req.RecoveryCode)), clientIP(r))
+			if err != nil {
+				WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to validate recovery code")
 				return
 			}
 		}
-
-		issueSession(w, r, store, cfg, user, mfaVerified, enrollmentOnly)
+		if !verified {
+			_ = store.AppendAuditLog(r.Context(), user.ID, "auth.mfa.challenge.failed", user.ID, clientIP(r), nil)
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "invalid MFA code")
+			return
+		}
+		if _, _, err := store.ConsumeAuthToken(r.Context(), models.AuthTokenPurposeMFAChallenge, req.ChallengeToken, clientIP(r)); err != nil {
+			WriteMappedError(w, http.StatusUnauthorized, err)
+			return
+		}
+		issueSession(w, r, store, cfg, user, true, false)
 	}
 }
 
@@ -396,35 +601,38 @@ func RefreshTokenHandler(store *db.Store, cfg *config.Config) http.HandlerFunc {
 		}
 
 		var req refreshRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request payload", http.StatusBadRequest)
-			return
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if cookie, err := r.Cookie(cfg.Settings.Security.RefreshCookieName); err == nil && cookie.Value != "" {
+			req.RefreshToken = cookie.Value
 		}
 		if req.RefreshToken == "" {
-			http.Error(w, "refreshToken is required", http.StatusBadRequest)
+			clearSessionCookies(w, cfg)
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "session recovery token is required")
 			return
 		}
 
 		newRefresh := db.NewRefreshToken()
-		user, _, err := store.RotateRefreshToken(r.Context(), req.RefreshToken, newRefresh, r.UserAgent(), clientIP(r), 30*24*time.Hour)
+		user, session, err := store.RotateRefreshToken(r.Context(), req.RefreshToken, newRefresh, r.UserAgent(), clientIP(r), cfg.Settings.Security.RefreshTTL)
 		if err != nil {
-			http.Error(w, "invalid refresh token", http.StatusUnauthorized)
+			clearSessionCookies(w, cfg)
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "session is expired or revoked")
 			return
 		}
 
-		signed, err := signAccessToken(user, cfg)
+		signed, err := signAccessToken(user, session, cfg)
 		if err != nil {
-			http.Error(w, "failed to sign token", http.StatusInternalServerError)
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to sign token")
 			return
 		}
 		_ = store.AppendAuditLog(r.Context(), user.ID, "auth.token.refreshed", user.ID, clientIP(r), nil)
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(tokenResponse{Token: signed, RefreshToken: newRefresh, ExpiresIn: int64((15 * time.Minute).Seconds())})
+		setSessionCookies(w, cfg, signed, newRefresh)
+		json.NewEncoder(w).Encode(tokenResponse{Authenticated: true, MFAEnrollmentRequired: session.EnrollmentOnly, User: user, ExpiresIn: int64(cfg.Settings.Security.AccessTTL.Seconds())})
 	}
 }
 
-func LogoutHandler(store *db.Store) http.HandlerFunc {
+func LogoutHandler(store *db.Store, cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -432,19 +640,22 @@ func LogoutHandler(store *db.Store) http.HandlerFunc {
 		}
 
 		var req refreshRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request payload", http.StatusBadRequest)
-			return
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if cookie, err := r.Cookie(cfg.Settings.Security.RefreshCookieName); err == nil && cookie.Value != "" {
+			req.RefreshToken = cookie.Value
 		}
 		userID := UserIDFromContext(r.Context())
 		if req.RefreshToken != "" {
 			_ = store.RevokeRefreshToken(r.Context(), req.RefreshToken, userID, clientIP(r))
+		} else if sessionID := SessionIDFromContext(r.Context()); sessionID != "" {
+			_ = store.RevokeAuthSession(r.Context(), sessionID, userID, userID, clientIP(r), "logout")
 		}
+		clearSessionCookies(w, cfg)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-func VerifyEmailHandler(store *db.Store) http.HandlerFunc {
+func VerifyEmailHandler(store *db.Store, cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -453,19 +664,27 @@ func VerifyEmailHandler(store *db.Store) http.HandlerFunc {
 
 		var req tokenRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && r.URL.Query().Get("token") == "" {
-			http.Error(w, "invalid request payload", http.StatusBadRequest)
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "invalid request payload")
 			return
 		}
 		if req.Token == "" {
 			req.Token = r.URL.Query().Get("token")
 		}
+		if err := verifySignedAuthToken(cfg, models.AuthTokenPurposeEmailVerification, req.Token); err != nil {
+			WriteMappedError(w, http.StatusBadRequest, err)
+			return
+		}
 		if req.Token == "" {
-			http.Error(w, "token is required", http.StatusBadRequest)
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "token is required")
 			return
 		}
 
 		_, user, err := store.ConsumeAuthToken(r.Context(), models.AuthTokenPurposeEmailVerification, req.Token, clientIP(r))
 		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "token already used") && user != nil && user.EmailVerified {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
 			WriteMappedError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -474,7 +693,7 @@ func VerifyEmailHandler(store *db.Store) http.HandlerFunc {
 			return
 		}
 		if err := store.VerifyEmail(r.Context(), user.ID); err != nil {
-			http.Error(w, fmt.Sprintf("failed to verify email: %v", err), http.StatusInternalServerError)
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to verify email")
 			return
 		}
 		_ = store.AppendAuditLog(r.Context(), user.ID, "auth.email.verified", user.ID, clientIP(r), nil)
@@ -491,14 +710,20 @@ func ResendVerificationHandler(store *db.Store, cfg *config.Config) http.Handler
 		}
 		var req emailRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request payload", http.StatusBadRequest)
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "invalid request payload")
 			return
 		}
 		user, err := store.GetUserByEmail(r.Context(), req.Email)
 		if err == nil && !user.EmailVerified {
-			raw := db.NewAuthToken()
-			if _, err := store.CreateAuthToken(r.Context(), user.ID, models.AuthTokenPurposeEmailVerification, raw, clientIP(r), 24*time.Hour); err == nil {
-				enqueueEmail(r.Context(), store, user.Email, "Verify your Skill Arena email", tokenLink(cfg.Settings.Email.BaseURL, "/verify-email", raw), "email_verification")
+			raw, tokenErr := newSignedAuthToken(cfg, models.AuthTokenPurposeEmailVerification, 24*time.Hour)
+			if tokenErr != nil {
+				WriteAPIError(w, http.StatusServiceUnavailable, ErrInternal, "verification delivery is temporarily unavailable")
+				return
+			}
+			if _, err := store.CreateAuthToken(r.Context(), user.ID, models.AuthTokenPurposeEmailVerification, raw, clientIP(r), 24*time.Hour); err != nil || enqueueEmail(r.Context(), store, user.Email, "Verify your Skill Arena email", tokenLink(cfg.Settings.Email.BaseURL, "/auth/verify-email", raw), "email_verification") != nil {
+				_ = store.AppendAuditLog(r.Context(), user.ID, "auth.email.delivery_failed", user.ID, clientIP(r), map[string]string{"template": "email_verification"})
+				WriteAPIError(w, http.StatusServiceUnavailable, ErrInternal, "verification delivery is temporarily unavailable")
+				return
 			}
 			_ = store.AppendAuditLog(r.Context(), user.ID, "auth.email.verification_resent", user.ID, clientIP(r), nil)
 		}
@@ -514,14 +739,20 @@ func PasswordResetRequestHandler(store *db.Store, cfg *config.Config) http.Handl
 		}
 		var req emailRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request payload", http.StatusBadRequest)
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "invalid request payload")
 			return
 		}
 		user, err := store.GetUserByEmail(r.Context(), req.Email)
 		if err == nil {
-			raw := db.NewAuthToken()
-			if _, err := store.CreateAuthToken(r.Context(), user.ID, models.AuthTokenPurposePasswordReset, raw, clientIP(r), 30*time.Minute); err == nil {
-				enqueueEmail(r.Context(), store, user.Email, "Reset your Skill Arena password", tokenLink(cfg.Settings.Email.BaseURL, "/reset-password", raw), "password_reset")
+			raw, tokenErr := newSignedAuthToken(cfg, models.AuthTokenPurposePasswordReset, 30*time.Minute)
+			if tokenErr != nil {
+				WriteAPIError(w, http.StatusServiceUnavailable, ErrInternal, "password recovery is temporarily unavailable")
+				return
+			}
+			if _, err := store.CreateAuthToken(r.Context(), user.ID, models.AuthTokenPurposePasswordReset, raw, clientIP(r), 30*time.Minute); err != nil || enqueueEmail(r.Context(), store, user.Email, "Reset your Skill Arena password", tokenLink(cfg.Settings.Email.BaseURL, "/auth/reset-password", raw), "password_reset") != nil {
+				_ = store.AppendAuditLog(r.Context(), user.ID, "auth.email.delivery_failed", user.ID, clientIP(r), map[string]string{"template": "password_reset"})
+				WriteAPIError(w, http.StatusServiceUnavailable, ErrInternal, "password recovery is temporarily unavailable")
+				return
 			}
 			_ = store.AppendAuditLog(r.Context(), user.ID, "auth.password_reset.requested", user.ID, clientIP(r), nil)
 		}
@@ -529,7 +760,7 @@ func PasswordResetRequestHandler(store *db.Store, cfg *config.Config) http.Handl
 	}
 }
 
-func PasswordResetConfirmHandler(store *db.Store) http.HandlerFunc {
+func PasswordResetConfirmHandler(store *db.Store, cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -537,18 +768,22 @@ func PasswordResetConfirmHandler(store *db.Store) http.HandlerFunc {
 		}
 		var req passwordResetConfirmRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request payload", http.StatusBadRequest)
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "invalid request payload")
 			return
 		}
 		if req.Password != req.ConfirmPassword {
-			http.Error(w, "password confirmation does not match", http.StatusBadRequest)
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "password confirmation does not match")
 			return
 		}
 		if policyErr := passwordPolicyError(req.Password); policyErr != "" {
-			http.Error(w, policyErr, http.StatusBadRequest)
+			WriteAPIError(w, http.StatusBadRequest, ErrPasswordPolicy, policyErr)
 			return
 		}
-		_, user, err := store.ConsumeAuthToken(r.Context(), models.AuthTokenPurposePasswordReset, req.Token, clientIP(r))
+		if err := verifySignedAuthToken(cfg, models.AuthTokenPurposePasswordReset, req.Token); err != nil {
+			WriteMappedError(w, http.StatusBadRequest, err)
+			return
+		}
+		_, user, err := store.InspectAuthToken(r.Context(), models.AuthTokenPurposePasswordReset, req.Token)
 		if err != nil {
 			WriteMappedError(w, http.StatusBadRequest, err)
 			return
@@ -556,20 +791,23 @@ func PasswordResetConfirmHandler(store *db.Store) http.HandlerFunc {
 		history, _ := store.PasswordHistory(r.Context(), user.ID)
 		for _, entry := range history {
 			if bcrypt.CompareHashAndPassword([]byte(entry.PasswordHash), []byte(req.Password)) == nil {
-				http.Error(w, "password was used recently", http.StatusBadRequest)
+				WriteAPIError(w, http.StatusBadRequest, ErrPasswordPolicy, "password was used recently")
 				return
 			}
 		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 		if err != nil {
-			http.Error(w, "failed to secure password", http.StatusInternalServerError)
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to secure password")
 			return
 		}
-		if err := store.UpdatePassword(r.Context(), user.ID, string(hash), sha256Hex(req.Password), clientIP(r)); err != nil {
-			http.Error(w, "failed to update password", http.StatusInternalServerError)
+		if err := store.CompletePasswordReset(r.Context(), req.Token, string(hash), clientIP(r)); err != nil {
+			if strings.Contains(err.Error(), "token") {
+				WriteMappedError(w, http.StatusBadRequest, err)
+				return
+			}
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to update password")
 			return
 		}
-		_ = store.RevokeUserSessions(r.Context(), user.ID, user.ID, clientIP(r), "password_reset")
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -656,6 +894,106 @@ func RegisterDeviceHandler(store *db.Store) http.HandlerFunc {
 	}
 }
 
+func SessionStatusHandler(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		user, err := store.GetUserByID(r.Context(), UserIDFromContext(r.Context()))
+		if err != nil {
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "session is not available")
+			return
+		}
+		mfa, _ := store.GetMFASettings(r.Context(), user.ID)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"authenticated":         true,
+			"user":                  user,
+			"mfaEnabled":            mfa.Enabled,
+			"mfaEnrollmentRequired": MFAEnrollmentOnlyFromContext(r.Context()),
+		})
+	}
+}
+
+func SessionsHandler(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		userID := UserIDFromContext(r.Context())
+		sessions, err := store.ListAuthSessions(r.Context(), userID)
+		if err != nil {
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to load sessions")
+			return
+		}
+		currentID := SessionIDFromContext(r.Context())
+		result := make([]publicSession, 0, len(sessions))
+		for _, session := range sessions {
+			result = append(result, publicSession{ID: session.ID, UserAgent: session.UserAgent, IPAddress: session.IPAddress, DeviceID: session.DeviceID, CreatedAt: session.CreatedAt, ExpiresAt: session.ExpiresAt, RevokedAt: session.RevokedAt, Current: session.ID == currentID, MFAVerified: session.MFAVerified})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"sessions": result})
+	}
+}
+
+func SessionRevokeHandler(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req sessionRevokeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SessionID == "" {
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "sessionId is required")
+			return
+		}
+		userID := UserIDFromContext(r.Context())
+		if err := store.RevokeAuthSession(r.Context(), req.SessionID, userID, userID, clientIP(r), "user_revoked"); err != nil {
+			WriteMappedError(w, http.StatusNotFound, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func DevicesHandler(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		devices, err := store.ListDevices(r.Context(), UserIDFromContext(r.Context()))
+		if err != nil {
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to load devices")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"devices": devices})
+	}
+}
+
+func DeviceRevokeHandler(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req deviceRevokeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.DeviceID == "" {
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "deviceId is required")
+			return
+		}
+		userID := UserIDFromContext(r.Context())
+		if err := store.RevokeDevice(r.Context(), userID, req.DeviceID, userID, clientIP(r)); err != nil {
+			WriteMappedError(w, http.StatusNotFound, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 func MFASetupHandler(store *db.Store, cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -669,22 +1007,27 @@ func MFASetupHandler(store *db.Store, cfg *config.Config) http.HandlerFunc {
 		}
 		user, err := store.GetUserByID(r.Context(), userID)
 		if err != nil {
-			http.Error(w, "failed to load user", http.StatusInternalServerError)
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to load user")
+			return
+		}
+		existing, _ := store.GetMFASettings(r.Context(), userID)
+		if existing.Enabled {
+			WriteAPIError(w, http.StatusConflict, ErrConflict, "MFA is already enabled")
 			return
 		}
 		secret, err := randomBase32(20)
 		if err != nil {
-			http.Error(w, "failed to create mfa secret", http.StatusInternalServerError)
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to create MFA secret")
 			return
 		}
 		ciphertext, err := sealSecret(secret, cfg)
 		if err != nil {
-			http.Error(w, "failed to protect mfa secret", http.StatusInternalServerError)
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to protect MFA secret")
 			return
 		}
 		setting := &models.MFASettings{UserID: userID, Enabled: false, TOTPSecretCiphertext: ciphertext}
 		if err := store.SaveMFASettings(r.Context(), setting, userID, clientIP(r)); err != nil {
-			http.Error(w, "failed to save mfa setup", http.StatusInternalServerError)
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to save MFA setup")
 			return
 		}
 		issuer := cfg.Settings.MFA.Issuer
@@ -707,13 +1050,13 @@ func MFAConfirmHandler(store *db.Store, cfg *config.Config) http.HandlerFunc {
 		}
 		var req mfaConfirmRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request payload", http.StatusBadRequest)
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "invalid request payload")
 			return
 		}
 		setting, _ := store.GetMFASettings(r.Context(), userID)
 		secret, err := openSecret(setting.TOTPSecretCiphertext, cfg)
 		if err != nil || !verifyTOTP(secret, req.Code, time.Now().UTC()) {
-			http.Error(w, "invalid mfa code", http.StatusUnauthorized)
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "invalid MFA code")
 			return
 		}
 		recoveryCodes := make([]string, 0, 10)
@@ -721,7 +1064,7 @@ func MFAConfirmHandler(store *db.Store, cfg *config.Config) http.HandlerFunc {
 		for i := 0; i < 10; i++ {
 			code, err := randomRecoveryCode()
 			if err != nil {
-				http.Error(w, "failed to create recovery codes", http.StatusInternalServerError)
+				WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to create recovery codes")
 				return
 			}
 			recoveryCodes = append(recoveryCodes, code)
@@ -731,15 +1074,21 @@ func MFAConfirmHandler(store *db.Store, cfg *config.Config) http.HandlerFunc {
 		setting.RecoveryCodeHashes = recoveryHashes
 		setting.ConfirmedAt = time.Now().UTC()
 		if err := store.SaveMFASettings(r.Context(), setting, userID, clientIP(r)); err != nil {
-			http.Error(w, "failed to enable mfa", http.StatusInternalServerError)
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to enable MFA")
 			return
+		}
+		if sessionID := SessionIDFromContext(r.Context()); sessionID != "" {
+			if err := store.MarkSessionMFA(r.Context(), sessionID, userID, true, false); err != nil {
+				WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to complete MFA session")
+				return
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string][]string{"recoveryCodes": recoveryCodes})
 	}
 }
 
-func MFADisableHandler(store *db.Store) http.HandlerFunc {
+func MFADisableHandler(store *db.Store, cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -750,13 +1099,47 @@ func MFADisableHandler(store *db.Store) http.HandlerFunc {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		setting, _ := store.GetMFASettings(r.Context(), userID)
-		setting.Enabled = false
-		setting.RecoveryCodeHashes = nil
-		if err := store.SaveMFASettings(r.Context(), setting, userID, clientIP(r)); err != nil {
-			http.Error(w, "failed to disable mfa", http.StatusInternalServerError)
+		user, err := store.GetUserByID(r.Context(), userID)
+		if err != nil {
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "account not found")
 			return
 		}
+		if privilegedRole(user.Role) {
+			WriteAPIError(w, http.StatusForbidden, ErrForbidden, "MFA is mandatory for privileged accounts")
+			return
+		}
+		var req mfaDisableRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Password == "" {
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "password and MFA proof are required")
+			return
+		}
+		if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)) != nil {
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "invalid security confirmation")
+			return
+		}
+		setting, _ := store.GetMFASettings(r.Context(), userID)
+		verified := false
+		if req.Code != "" && setting.TOTPSecretCiphertext != "" {
+			if secret, err := openSecret(setting.TOTPSecretCiphertext, cfg); err == nil {
+				verified = verifyTOTP(secret, req.Code, time.Now().UTC())
+			}
+		}
+		if !verified && req.RecoveryCode != "" {
+			verified, _ = store.ConsumeRecoveryCode(r.Context(), userID, sha256Hex(strings.TrimSpace(req.RecoveryCode)), clientIP(r))
+		}
+		if !verified {
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "invalid MFA proof")
+			return
+		}
+		setting.Enabled = false
+		setting.TOTPSecretCiphertext = ""
+		setting.RecoveryCodeHashes = nil
+		if err := store.SaveMFASettings(r.Context(), setting, userID, clientIP(r)); err != nil {
+			WriteAPIError(w, http.StatusInternalServerError, ErrInternal, "failed to disable MFA")
+			return
+		}
+		_ = store.RevokeUserSessions(r.Context(), userID, userID, clientIP(r), "mfa_disabled")
+		clearSessionCookies(w, cfg)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

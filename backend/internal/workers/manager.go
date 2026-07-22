@@ -14,6 +14,7 @@ import (
 
 	"skill-arena/internal/config"
 	"skill-arena/internal/db"
+	"skill-arena/internal/email"
 	"skill-arena/internal/id"
 	"skill-arena/internal/models"
 )
@@ -32,10 +33,11 @@ type Manager struct {
 	cfg    *config.Config
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	email  email.Sender
 }
 
 func NewManager(store *db.Store, cfg *config.Config) *Manager {
-	return &Manager{store: store, cfg: cfg}
+	return &Manager{store: store, cfg: cfg, email: email.NewSender(cfg.Settings.Email, store.DataDir())}
 }
 
 func (m *Manager) Start(ctx context.Context) {
@@ -163,12 +165,13 @@ func (m *Manager) processEmail(ctx context.Context, job *models.BackgroundJob) (
 	if job.Payload["to"] == "" && job.Payload["userId"] == "" {
 		return "", errors.New("email job requires to or userId")
 	}
-	return writeArtifact(m.store.DataDir(), "email_outbox", job.ID+".json", map[string]any{
-		"jobId":   job.ID,
-		"type":    job.Payload["template"],
-		"payload": job.Payload,
-		"queued":  time.Now().UTC(),
-	})
+	if m.email == nil {
+		return "", errors.New("email sender is not configured")
+	}
+	if err := m.email.Send(ctx, email.Message{To: job.Payload["to"], Subject: job.Payload["subject"], Template: job.Payload["template"], Link: job.Payload["link"]}); err != nil {
+		return "", err
+	}
+	return "email:" + job.ID, nil
 }
 
 func (m *Manager) processLeaderboard(ctx context.Context, job *models.BackgroundJob) (string, error) {

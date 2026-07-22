@@ -14,20 +14,26 @@ type AuthSession struct {
 	RefreshTokenHash string     `json:"refreshTokenHash"`
 	UserAgent        string     `json:"userAgent,omitempty"`
 	IPAddress        string     `json:"ipAddress,omitempty"`
+	DeviceID         string     `json:"deviceId,omitempty"`
+	FamilyID         string     `json:"familyId,omitempty"`
 	CreatedAt        time.Time  `json:"createdAt"`
 	ExpiresAt        time.Time  `json:"expiresAt"`
 	RevokedAt        *time.Time `json:"revokedAt,omitempty"`
 	RotatedAt        *time.Time `json:"rotatedAt,omitempty"`
+	MFAVerified      bool       `json:"mfaVerified"`
+	EnrollmentOnly   bool       `json:"enrollmentOnly"`
 }
 
 type AuditLog struct {
-	ID        string            `json:"id"`
-	ActorID   string            `json:"actorId"`
-	Action    string            `json:"action"`
-	TargetID  string            `json:"targetId,omitempty"`
-	IPAddress string            `json:"ipAddress,omitempty"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	CreatedAt time.Time         `json:"createdAt"`
+	ID           string            `json:"id"`
+	ActorID      string            `json:"actorId"`
+	Action       string            `json:"action"`
+	TargetID     string            `json:"targetId,omitempty"`
+	IPAddress    string            `json:"ipAddress,omitempty"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
+	CreatedAt    time.Time         `json:"createdAt"`
+	PreviousHash string            `json:"previousHash,omitempty"`
+	EntryHash    string            `json:"entryHash,omitempty"`
 }
 
 type AuthToken struct {

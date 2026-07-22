@@ -16,6 +16,13 @@ const (
 	ErrHouseLocked     = "HOUSE_LOCKED"
 	ErrMaintenance     = "MAINTENANCE_MODE"
 	ErrInternal        = "INTERNAL_ERROR"
+	ErrConflict        = "CONFLICT"
+	ErrEmailUnverified = "AUTH_EMAIL_UNVERIFIED"
+	ErrMFARequired     = "AUTH_MFA_REQUIRED"
+	ErrAccountLocked   = "AUTH_ACCOUNT_LOCKED"
+	ErrPasswordPolicy  = "AUTH_PASSWORD_POLICY"
+	ErrTokenExpired    = "AUTH_TOKEN_EXPIRED"
+	ErrTokenUsed       = "AUTH_TOKEN_USED"
 )
 
 type APIError struct {

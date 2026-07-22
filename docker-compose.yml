@@ -1,29 +1,83 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: skillarena
+      POSTGRES_USER: skillarena
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skillarena -d skillarena"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+
   backend:
     build:
       context: ./backend
+    restart: unless-stopped
     environment:
+      SKILL_ARENA_ENV: production
       SKILL_ARENA_HTTP_ADDR: ":8080"
-      SKILL_ARENA_DATABASE_URL: /data
-      SKILL_ARENA_JWT_SECRET: local-development-change-me
-      SKILL_ARENA_EMAIL_OUTBOX_ONLY: "true"
+      SKILL_ARENA_DATABASE_URL: "postgresql://skillarena:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/skillarena?sslmode=disable"
+      SKILL_ARENA_REDIS_URL: "redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379"
+      SKILL_ARENA_JWT_SECRET: ${SKILL_ARENA_JWT_SECRET:?SKILL_ARENA_JWT_SECRET is required}
+      SKILL_ARENA_MFA_ENCRYPTION_KEY: ${SKILL_ARENA_MFA_ENCRYPTION_KEY:?SKILL_ARENA_MFA_ENCRYPTION_KEY is required}
+      SKILL_ARENA_PUZZLE_SECRET: ${SKILL_ARENA_PUZZLE_SECRET:?SKILL_ARENA_PUZZLE_SECRET is required}
+      SKILL_ARENA_COOKIE_SECURE: "true"
+      SKILL_ARENA_PUBLIC_BASE_URL: ${SKILL_ARENA_PUBLIC_BASE_URL:?SKILL_ARENA_PUBLIC_BASE_URL is required}
+      SKILL_ARENA_ALLOWED_ORIGINS: ${SKILL_ARENA_ALLOWED_ORIGINS:?SKILL_ARENA_ALLOWED_ORIGINS is required}
+      SKILL_ARENA_EMAIL_OUTBOX_ONLY: "false"
+      SKILL_ARENA_SMTP_HOST: ${SKILL_ARENA_SMTP_HOST:?SKILL_ARENA_SMTP_HOST is required}
+      SKILL_ARENA_SMTP_PORT: ${SKILL_ARENA_SMTP_PORT:-587}
+      SKILL_ARENA_SMTP_USER: ${SKILL_ARENA_SMTP_USER:-}
+      SKILL_ARENA_SMTP_PASS: ${SKILL_ARENA_SMTP_PASS:-}
+      SKILL_ARENA_EMAIL_FROM: ${SKILL_ARENA_EMAIL_FROM:?SKILL_ARENA_EMAIL_FROM is required}
     ports:
       - "8080:8080"
-    volumes:
-      - backend-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/bin/wget", "-qO-", "http://127.0.0.1:8080/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
 
   frontend:
-    image: node:20-alpine
-    working_dir: /app
-    command: sh -c "npm install && npm run dev -- --hostname 0.0.0.0"
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?NEXT_PUBLIC_API_BASE_URL is required}
+    restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8080
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
     ports:
       - "3000:3000"
-    volumes:
-      - ./frontend:/app
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
-  backend-data:
+  postgres-data:
+  redis-data:

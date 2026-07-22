@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -21,6 +20,7 @@ type contextKey string
 const userIDKey contextKey = "userId"
 const userRoleKey contextKey = "userRole"
 const mfaEnrollmentOnlyKey contextKey = "mfaEnrollmentOnly"
+const sessionIDKey contextKey = "sessionId"
 
 var rateLimiter = newMemoryRateLimiter()
 
@@ -46,6 +46,7 @@ func newMemoryRateLimiter() *memoryRateLimiter {
 			"/api/v1/auth/password-reset/request": {Limit: settings.RegisterLimit, Window: settings.DefaultWindow},
 			"/api/v1/auth/password-reset/confirm": {Limit: settings.LoginLimit, Window: settings.DefaultWindow},
 			"/api/v1/auth/mfa/confirm":            {Limit: settings.LoginLimit, Window: settings.DefaultWindow},
+			"/api/v1/auth/mfa/challenge":          {Limit: settings.LoginLimit, Window: settings.DefaultWindow},
 			"/api/v1/pvp/join":                    {Limit: settings.MatchCreationLimit, Window: settings.DefaultWindow},
 			"/api/v1/games/start":                 {Limit: settings.MatchCreationLimit, Window: settings.DefaultWindow},
 			"/api/v1/replays":                     {Limit: settings.ReplayLimit, Window: settings.DefaultWindow},
@@ -126,35 +127,8 @@ func redisRateLimitAllow(ctx context.Context, store *db.Store, key string, rule 
 	if store == nil || store.Redis() == nil {
 		return false, errors.New("redis unavailable")
 	}
-	redisKey := "rate:" + key
-	value, ok, err := store.Redis().Get(ctx, redisKey)
-	if err != nil {
-		return false, err
-	}
-	events := []time.Time{}
-	if ok && value != "" {
-		if err := json.Unmarshal([]byte(value), &events); err != nil {
-			events = []time.Time{}
-		}
-	}
-	cutoff := now.Add(-rule.Window)
-	kept := events[:0]
-	for _, event := range events {
-		if event.After(cutoff) {
-			kept = append(kept, event)
-		}
-	}
-	if len(kept) >= rule.Limit {
-		data, _ := json.Marshal(kept)
-		_ = store.Redis().Set(ctx, redisKey, string(data), rule.Window)
-		return false, nil
-	}
-	kept = append(kept, now)
-	data, err := json.Marshal(kept)
-	if err != nil {
-		return false, err
-	}
-	return true, store.Redis().Set(ctx, redisKey, string(data), rule.Window)
+	_ = now
+	return store.Redis().Allow(ctx, "rate:"+key, rule.Limit, rule.Window)
 }
 
 func MaintenanceMiddleware(cfg *config.Config, next http.Handler) http.Handler {
@@ -181,12 +155,17 @@ func MaintenanceMiddleware(cfg *config.Config, next http.Handler) http.Handler {
 	})
 }
 
-func AuthMiddleware(cfg *config.Config, next http.Handler) http.Handler {
+func AuthMiddleware(store *db.Store, cfg *config.Config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tokenValue := r.Header.Get("Authorization")
 		if tokenValue == "" {
-			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "authorization token is required")
-			return
+			if cookie, err := r.Cookie(cfg.Settings.Security.AccessCookieName); err == nil {
+				tokenValue = cookie.Value
+			}
+			if tokenValue == "" {
+				WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "authentication is required")
+				return
+			}
 		}
 
 		if strings.HasPrefix(strings.ToLower(tokenValue), "bearer ") {
@@ -195,12 +174,16 @@ func AuthMiddleware(cfg *config.Config, next http.Handler) http.Handler {
 
 		claims := jwt.MapClaims{}
 		token, err := jwt.ParseWithClaims(tokenValue, claims, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			if token.Method != jwt.SigningMethodHS256 {
 				return nil, errors.New("unexpected signing method")
 			}
 			return []byte(cfg.JWTSecret), nil
 		})
 		if err != nil || !token.Valid {
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "invalid authorization token")
+			return
+		}
+		if claims["typ"] != "access" || claims["iss"] != "skill-arena-api" || claims["aud"] != "skill-arena-web" {
 			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "invalid authorization token")
 			return
 		}
@@ -211,18 +194,48 @@ func AuthMiddleware(cfg *config.Config, next http.Handler) http.Handler {
 			return
 		}
 
-		role, _ := claims["role"].(string)
-		if role == "" {
-			role = "player"
+		sessionID, ok := claims["sid"].(string)
+		if !ok || sessionID == "" {
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "invalid authorization session")
+			return
+		}
+		session, user, err := store.ValidateAuthSession(r.Context(), sessionID, sub)
+		if err != nil {
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "session is expired or revoked")
+			return
+		}
+		if privilegedRole(user.Role) && !session.MFAVerified && !session.EnrollmentOnly {
+			WriteAPIError(w, http.StatusForbidden, ErrMFARequired, "MFA verification is required")
+			return
+		}
+		if session.EnrollmentOnly {
+			allowed := r.URL.Path == "/api/v1/auth/mfa/setup" || r.URL.Path == "/api/v1/auth/mfa/confirm" || r.URL.Path == "/api/v1/auth/session" || r.URL.Path == "/api/v1/auth/logout"
+			if !allowed {
+				WriteAPIError(w, http.StatusForbidden, ErrMFARequired, "MFA enrollment is required before continuing")
+				return
+			}
 		}
 
 		ctx := context.WithValue(r.Context(), userIDKey, sub)
-		ctx = context.WithValue(ctx, userRoleKey, role)
-		if enrollmentOnly, _ := claims["mfaEnrollmentOnly"].(bool); enrollmentOnly {
+		ctx = context.WithValue(ctx, userRoleKey, user.Role)
+		ctx = context.WithValue(ctx, sessionIDKey, session.ID)
+		if session.EnrollmentOnly {
 			ctx = context.WithValue(ctx, mfaEnrollmentOnlyKey, true)
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func SessionIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(sessionIDKey).(string); ok {
+		return v
+	}
+	return ""
+}
+
+func MFAEnrollmentOnlyFromContext(ctx context.Context) bool {
+	value, _ := ctx.Value(mfaEnrollmentOnlyKey).(bool)
+	return value
 }
 
 func UserIDFromContext(ctx context.Context) string {
@@ -245,7 +258,8 @@ func RequireRole(role string, next http.Handler) http.Handler {
 			WriteAPIError(w, http.StatusForbidden, ErrForbidden, "mfa enrollment required before privileged access")
 			return
 		}
-		if models.RoleRank(UserRoleFromContext(r.Context())) < models.RoleRank(role) {
+		actual := UserRoleFromContext(r.Context())
+		if actual != models.RoleSuperAdmin && actual != role {
 			WriteAPIError(w, http.StatusForbidden, ErrForbidden, "insufficient permissions")
 			return
 		}

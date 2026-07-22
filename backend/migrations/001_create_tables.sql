@@ -1,6 +1,9 @@
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
+    country TEXT NOT NULL DEFAULT '',
+    date_of_birth DATE,
+    terms_accepted_at TIMESTAMP WITH TIME ZONE,
     username TEXT NOT NULL,
     display_name TEXT NOT NULL,
     hidden_from_public BOOLEAN NOT NULL DEFAULT FALSE,
