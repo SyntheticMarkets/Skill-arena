@@ -73,6 +73,9 @@ type Store struct {
 	payments       map[string]*models.PaymentProviderSession
 	withdrawals    map[string]*models.WithdrawalRequest
 	amlReviews     map[string]*models.AMLReview
+	playerProfiles map[string]*models.PlayerProfile
+	notifications  map[string][]*models.Notification
+	supportTickets map[string][]*models.SupportTicket
 	dataDir        string
 	persistence    string
 	pg             *sql.DB
@@ -234,6 +237,9 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 		payments:       map[string]*models.PaymentProviderSession{},
 		withdrawals:    map[string]*models.WithdrawalRequest{},
 		amlReviews:     map[string]*models.AMLReview{},
+		playerProfiles: map[string]*models.PlayerProfile{},
+		notifications:  map[string][]*models.Notification{},
+		supportTickets: map[string][]*models.SupportTicket{},
 		dataDir:        dataDir,
 		persistence:    persistence,
 		redis:          redisClient,
@@ -281,8 +287,15 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 			_ = pg.Close()
 			return nil, fmt.Errorf("migrate identity snapshot: %w", err)
 		}
+		if err := store.migrateLegacyHubState(ctx); err != nil {
+			_ = pg.Close()
+			return nil, fmt.Errorf("migrate Arena Hub state: %w", err)
+		}
 	} else {
 		if err := store.load(); err != nil {
+			return nil, err
+		}
+		if err := store.loadHubState(); err != nil {
 			return nil, err
 		}
 	}
@@ -749,7 +762,10 @@ CREATE INDEX IF NOT EXISTS idx_financial_idempotency_user_operation ON financial
 	if err != nil {
 		return err
 	}
-	return s.initPostgresAuth(ctx)
+	if err := s.initPostgresAuth(ctx); err != nil {
+		return err
+	}
+	return s.initPostgresHub(ctx)
 }
 
 func (s *Store) loadPostgresSnapshot(ctx context.Context) (bool, error) {
@@ -1017,6 +1033,9 @@ func (s *Store) loadProgression() error {
 }
 
 func (s *Store) persistProgression() error {
+	if err := s.persistHubProgressionLocked(context.Background()); err != nil {
+		return err
+	}
 	path := filepath.Join(s.dataDir, "progression.json")
 	progressions := make([]*models.Progression, 0, len(s.profiles))
 	for _, progression := range s.profiles {

@@ -1,27 +1,73 @@
 'use client'
 
+import { ArrowDownLeft, ArrowUpRight, Clock3, ShieldCheck, WalletCards } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useHub } from '../hub-context'
+import { apiFetch } from '../lib/api'
 
-const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8080'
-type Profile = { liveBalance: number; availableLiveBalance: number; demoBalance: number; availableDemoBalance: number; pendingWithdrawals: number }
-type Ledger = { id: string; transactionType: string; amount: number; balanceAfter: number; reference?: string; createdAt: string }
-const authHeaders = () => { const token = window.localStorage.getItem('skill-arena-token'); return token ? { Authorization: `Bearer ${token}` } : null }
+type Transaction = {
+  id: string
+  transactionType: string
+  amount: number
+  balanceAfter: number
+  currency: string
+  reference?: string
+  createdAt: string
+}
+
+function money(value: number, currency: string) {
+  return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(value)
+}
 
 export default function WalletPage() {
-  const router = useRouter()
-  const [profile, setProfile] = useState<Profile | null>(null)
-  const [ledger, setLedger] = useState<Ledger[]>([])
+  const { data, status: hubStatus } = useHub()
+  const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+
   useEffect(() => {
-    const headers = authHeaders()
-    if (!headers) { router.replace('/auth/login'); return }
-    Promise.all([fetch(`${apiBase}/api/v1/profile`, { headers }), fetch(`${apiBase}/api/v1/wallet/transactions`, { headers })]).then(async ([p, l]) => { setProfile(await p.json()); setLedger(await l.json()) }).catch(() => undefined)
-  }, [router])
+    const timer = window.setTimeout(() => {
+      void apiFetch<Transaction[]>('/api/v1/wallet/transactions')
+        .then((response) => { setTransactions(response); setStatus('ready') })
+        .catch(() => setStatus('error'))
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [])
+
+  if (hubStatus === 'loading' || !data) return <main className="hub-page"><div className="inline-loading">Loading wallet state...</div></main>
+
   return (
-    <main className="page-shell">
-      <section className="dashboard-command"><div><span className="eyebrow">Wallet</span><h1>Balances and ledger</h1><p>Server-calculated balances and token movement history.</p></div></section>
-      <section className="metric-grid"><article className="metric-card"><span>Available Live</span><strong>{profile?.availableLiveBalance.toFixed(2) ?? '-'}</strong></article><article className="metric-card"><span>Demo</span><strong>{profile?.availableDemoBalance.toFixed(2) ?? '-'}</strong></article><article className="metric-card"><span>Pending Withdrawals</span><strong>{profile?.pendingWithdrawals.toFixed(2) ?? '-'}</strong></article></section>
-      <section className="panel-large"><table className="leaderboard-table"><thead><tr><th>Time</th><th>Type</th><th>Amount</th><th>Balance</th><th>Reference</th></tr></thead><tbody>{ledger.map((entry) => <tr key={entry.id}><td>{new Date(entry.createdAt).toLocaleString()}</td><td>{entry.transactionType}</td><td>{entry.amount.toFixed(2)}</td><td>{entry.balanceAfter.toFixed(2)}</td><td>{entry.reference || '-'}</td></tr>)}</tbody></table></section>
+    <main className="hub-page">
+      <section className="subpage-heading">
+        <div><span className="eyebrow">Wallet overview</span><h1>Every balance has a state.</h1><p>Review available funds, pending movement, verification status, and the transaction trail recorded by the ledger.</p></div>
+        <WalletCards aria-hidden="true" />
+      </section>
+
+      <section className="wallet-overview">
+        <article className="wallet-primary">
+          <span>Available balance</span>
+          <strong>{money(data.wallet.availableBalance, data.wallet.currency)}</strong>
+          <small>{data.wallet.accountStatus} account / {data.wallet.verificationStatus} verification</small>
+        </article>
+        <article><ArrowDownLeft /><span>Pending deposits</span><strong>{money(data.wallet.pendingDeposits, data.wallet.currency)}</strong></article>
+        <article><ArrowUpRight /><span>Pending withdrawals</span><strong>{money(data.wallet.pendingWithdrawals, data.wallet.currency)}</strong></article>
+        <article><ShieldCheck /><span>Live eligibility</span><strong>{data.eligibility.liveEligible ? 'Eligible' : 'Locked'}</strong></article>
+      </section>
+
+      <section className="hub-section" aria-labelledby="wallet-history-title">
+        <div className="hub-section-heading"><div><span className="eyebrow">Transaction history</span><h2 id="wallet-history-title">Ledger activity</h2></div></div>
+        {status === 'loading' ? <div className="inline-loading">Loading transactions...</div> : null}
+        {status === 'error' ? <div className="form-message error">Transaction history is temporarily unavailable.</div> : null}
+        {status === 'ready' && transactions.length === 0 ? <p className="hub-empty">No wallet transaction has been recorded.</p> : null}
+        <div className="transaction-list">
+          {transactions.map((transaction) => (
+            <article key={transaction.id}>
+              <span className="transaction-icon"><Clock3 /></span>
+              <span><strong>{transaction.transactionType.replace(/_/g, ' ')}</strong><small>{transaction.reference || transaction.id} / {new Date(transaction.createdAt).toLocaleString()}</small></span>
+              <span><strong>{money(transaction.amount, transaction.currency)}</strong><small>Balance {money(transaction.balanceAfter, transaction.currency)}</small></span>
+            </article>
+          ))}
+        </div>
+      </section>
     </main>
   )
 }

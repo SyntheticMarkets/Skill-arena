@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import '../styles/globals.css'
 import { AppShell } from './app-shell'
 import { AuthProvider } from './auth-context'
+import { HubProvider } from './hub-context'
 
 export const metadata: Metadata = {
   title: 'Skill Arena',
@@ -16,7 +17,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <AuthProvider>
-          <AppShell>{children}</AppShell>
+          <HubProvider>
+            <AppShell>{children}</AppShell>
+          </HubProvider>
         </AuthProvider>
       </body>
     </html>

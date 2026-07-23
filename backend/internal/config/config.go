@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/mail"
 	"net/url"
 	"os"
 	"strconv"
@@ -168,7 +169,8 @@ type BackupSettings struct {
 }
 
 type PlatformSettings struct {
-	LaunchPhase string
+	LaunchPhase  string
+	SupportEmail string
 }
 
 type SecuritySettings struct {
@@ -328,7 +330,8 @@ func LoadRuntimeSettings() *RuntimeSettings {
 			VerificationFile: envString("SKILL_ARENA_BACKUP_VERIFICATION_FILE", "backup_manifest.json"),
 		},
 		Platform: PlatformSettings{
-			LaunchPhase: strings.ToUpper(envString("SKILL_ARENA_LAUNCH_PHASE", "PRE_LAUNCH")),
+			LaunchPhase:  strings.ToUpper(envString("SKILL_ARENA_LAUNCH_PHASE", "PRE_LAUNCH")),
+			SupportEmail: envString("SKILL_ARENA_SUPPORT_EMAIL", "support@skillarena.local"),
 		},
 		Security: SecuritySettings{
 			PuzzleSecret:      envString("SKILL_ARENA_PUZZLE_SECRET", envString("SKILL_ARENA_JWT_SECRET", "local-development-puzzle-secret")),
@@ -396,6 +399,9 @@ func validateProduction(cfg *Config) error {
 	}
 	if cfg.Settings.Email.SMTPHost == "" || cfg.Settings.Email.SMTPPort <= 0 || cfg.Settings.Email.From == "" {
 		return errors.New("production SMTP host, port, and from address are required")
+	}
+	if address, err := mail.ParseAddress(cfg.Settings.Platform.SupportEmail); err != nil || address.Address != cfg.Settings.Platform.SupportEmail {
+		return errors.New("production SKILL_ARENA_SUPPORT_EMAIL must be a valid email address")
 	}
 	if cfg.RedisURL == "" {
 		return errors.New("SKILL_ARENA_REDIS_URL is required in production")

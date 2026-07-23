@@ -17,6 +17,7 @@ const (
 	ErrMaintenance     = "MAINTENANCE_MODE"
 	ErrInternal        = "INTERNAL_ERROR"
 	ErrConflict        = "CONFLICT"
+	ErrNotFound        = "NOT_FOUND"
 	ErrEmailUnverified = "AUTH_EMAIL_UNVERIFIED"
 	ErrMFARequired     = "AUTH_MFA_REQUIRED"
 	ErrAccountLocked   = "AUTH_ACCOUNT_LOCKED"

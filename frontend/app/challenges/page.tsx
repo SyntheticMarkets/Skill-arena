@@ -1,43 +1,32 @@
 'use client'
 
 import Link from 'next/link'
+import { Check, Goal, LockKeyhole, ShieldAlert } from 'lucide-react'
+import { useHub } from '../hub-context'
 
 export default function ChallengesPage() {
+  const { data, status, error } = useHub()
+
+  if (status === 'loading' || status === 'idle') return <main className="hub-page"><div className="inline-loading">Loading challenge eligibility...</div></main>
+  if (!data) return <main className="hub-page"><div className="form-message error">{error || 'Challenges are unavailable.'}</div></main>
+
   return (
-    <main className="page-shell">
-      <section className="dashboard-command">
-        <div>
-          <span className="eyebrow">Challenges</span>
-          <h1>Daily challenges</h1>
-          <p>Calibration, house attempts, and PvP tasks route through the existing game systems.</p>
-        </div>
-        <div className="quick-actions">
-          <Link className="button" href="/games">Play</Link>
-          <Link className="button secondary" href="/dashboard">Dashboard</Link>
-        </div>
+    <main className="hub-page">
+      <section className="subpage-heading">
+        <div><span className="eyebrow">Challenge paths</span><h1>Know what you can enter.</h1><p>Availability comes from account, progression, Trust, and platform state. Locked paths always explain why.</p></div>
+        <Goal aria-hidden="true" />
       </section>
-
-      <section className="content-grid">
-        <article className="panel">
-          <span className="eyebrow">Calibration</span>
-          <h2>Baseline run</h2>
-          <p>Complete a calibration run before entering higher trust-sensitive modes.</p>
-          <Link href="/games">Start</Link>
-        </article>
-
-        <article className="panel">
-          <span className="eyebrow">House</span>
-          <h2>Bronze House</h2>
-          <p>Attempt the entry house challenge once your account is eligible.</p>
-          <Link href="/games">Challenge</Link>
-        </article>
-
-        <article className="panel">
-          <span className="eyebrow">PvP</span>
-          <h2>Ranked queue</h2>
-          <p>Join a live opponent queue from Arena Hub.</p>
-          <Link href="/games">Queue</Link>
-        </article>
+      <section className="challenge-directory">
+        {data.challenges.map((challenge) => {
+          const available = challenge.status === 'available'
+          return (
+            <article key={challenge.id}>
+              <span className={`challenge-symbol ${available ? 'available' : ''}`}>{available ? <Check /> : challenge.status === 'locked' ? <LockKeyhole /> : <ShieldAlert />}</span>
+              <div><span>{challenge.type}</span><h2>{challenge.title}</h2><p>{available ? 'Your current account state permits this path.' : challenge.reason}</p></div>
+              {available && challenge.actionUrl ? <Link className="button secondary" href={challenge.actionUrl}>Open</Link> : <strong>{challenge.status}</strong>}
+            </article>
+          )
+        })}
       </section>
     </main>
   )

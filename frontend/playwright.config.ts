@@ -21,7 +21,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: String.raw`powershell -NoProfile -Command "$target=Join-Path (Get-Location) '.e2e-data'; if (-not $target.StartsWith((Get-Location).Path)) { throw 'Unsafe E2E data path' }; if (Test-Path $target) { Remove-Item -LiteralPath $target -Recurse -Force }; $env:SKILL_ARENA_JWT_SECRET='e2e-jwt-secret-at-least-32-characters'; $env:SKILL_ARENA_DATABASE_URL='.e2e-data'; $env:SKILL_ARENA_HTTP_ADDR='127.0.0.1:18080'; $env:SKILL_ARENA_PUBLIC_BASE_URL='http://127.0.0.1:13000'; $env:SKILL_ARENA_ALLOWED_ORIGINS='http://127.0.0.1:13000'; $env:SKILL_ARENA_SUPER_ADMINS='mfa-desktop-chromium@example.com,mfa-tablet-chromium@example.com,mfa-mobile-chromium@example.com'; & 'C:\Program Files\Go\bin\go.exe' run ./cmd/api"`,
+      command: String.raw`powershell -NoProfile -Command "$target=Join-Path (Get-Location) '.e2e-data'; if (-not $target.StartsWith((Get-Location).Path)) { throw 'Unsafe E2E data path' }; if (Test-Path $target) { Remove-Item -LiteralPath $target -Recurse -Force }; $env:SKILL_ARENA_JWT_SECRET='e2e-jwt-secret-at-least-32-characters'; $env:SKILL_ARENA_DATABASE_URL='.e2e-data'; $env:SKILL_ARENA_HTTP_ADDR='127.0.0.1:18080'; $env:SKILL_ARENA_PUBLIC_BASE_URL='http://127.0.0.1:13000'; $env:SKILL_ARENA_ALLOWED_ORIGINS='http://127.0.0.1:13000'; $env:SKILL_ARENA_RATE_REGISTER_LIMIT='100'; $env:SKILL_ARENA_RATE_LOGIN_LIMIT='100'; $env:SKILL_ARENA_SUPER_ADMINS='mfa-desktop-chromium@example.com,mfa-tablet-chromium@example.com,mfa-mobile-chromium@example.com'; & 'C:\Program Files\Go\bin\go.exe' run ./cmd/api"`,
       cwd: '../backend',
       url: 'http://127.0.0.1:18080/health/ready',
       timeout: 120_000,

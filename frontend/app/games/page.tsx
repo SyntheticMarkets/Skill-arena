@@ -1,127 +1,56 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Check, Gamepad2, LockKeyhole, Play, RotateCcw, ShieldCheck } from 'lucide-react'
+import { useState } from 'react'
+import { HubGame, useHub } from '../hub-context'
+import { postJSON } from '../lib/api'
 import { ArrowLine, ArrowLinePuzzle, escapeBlocker, normalizeLines } from '../maze-preview'
 
-const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8080'
-
-type PvPMatchDetail = {
-  match: {
-    id: string
-    playerAId: string
-    playerBId?: string
-    queueType: string
-    walletType: string
-    stake: number
-    status: string
-    winnerId?: string
-    playerALines?: ArrowLine[]
-    playerBLines?: ArrowLine[]
-  }
-  submissions: Array<{ id: string; userId: string; isValidRoute: boolean; moveCount: number }>
+type StartGameResponse = {
+  sessionId: string
+  state: string
+  difficultyRating: number
+  generationHash: string
+  lines?: ArrowLine[]
 }
-type Profile = { id: string }
-type StartGameResponse = { sessionId: string; lines?: ArrowLine[] }
 
-function authHeaders() {
-  const token = window.localStorage.getItem('skill-arena-token')
-  return token ? { Authorization: `Bearer ${token}` } : null
+type FinishGameResponse = {
+  session: { outcome: string; lines?: ArrowLine[] }
 }
 
 export default function GamesPage() {
-  const router = useRouter()
-  const [stake, setStake] = useState(10)
-  const [walletType, setWalletType] = useState('demo')
-  const [queueType, setQueueType] = useState('ranked')
-  const [matchId, setMatchId] = useState('')
+  const { data, status, error: hubError, reload } = useHub()
   const [sessionId, setSessionId] = useState('')
-  const [activeMode, setActiveMode] = useState<'practice' | 'pvp'>('practice')
-  const [currentUserId, setCurrentUserId] = useState('')
-  const [pvpMatches, setPvpMatches] = useState<PvPMatchDetail[]>([])
+  const [activeGame, setActiveGame] = useState<HubGame | null>(null)
   const [lines, setLines] = useState<ArrowLine[]>([])
   const [clickedLineIds, setClickedLineIds] = useState<string[]>([])
+  const [generationHash, setGenerationHash] = useState('')
+  const [difficulty, setDifficulty] = useState(0)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
 
   const removedCount = lines.filter((line) => line.state === 'removed').length
-  const blockedCount = lines.filter((line) => line.state === 'blocked').length
-  const progress = Math.round((removedCount / Math.max(1, lines.length)) * 100)
-  const opponentProgress = matchId ? Math.min(96, Math.max(12, progress - 8 + (removedCount % 5) * 3)) : 0
-  const opponentLines = useMemo(() => lines.slice(0, Math.min(34, lines.length)), [lines])
+  const progress = lines.length ? Math.round((removedCount / lines.length) * 100) : 0
 
-  useEffect(() => {
-    const headers = authHeaders()
-    if (!headers) {
-      router.replace('/auth/login')
-      return
-    }
-    Promise.all([
-      fetch(`${apiBase}/api/v1/profile`, { headers }),
-      fetch(`${apiBase}/api/v1/pvp/matches`, { headers }),
-    ]).then(async ([profileRes, pvpRes]) => {
-      if (profileRes.ok) {
-        const profile: Profile = await profileRes.json()
-        setCurrentUserId(profile.id)
-      }
-      const body = pvpRes.ok ? await pvpRes.json() : []
-      setPvpMatches((body ?? []).filter((detail: PvPMatchDetail) => detail.match.playerAId !== detail.match.playerBId))
-    }).catch(() => undefined)
-  }, [router])
-
-  async function startServerBoard() {
-    setMessage('')
+  async function startPractice(game: HubGame) {
+    setBusy(true)
     setError('')
-    const headers = authHeaders()
-    if (!headers) return
-    const response = await fetch(`${apiBase}/api/v1/games/start`, {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gameType: walletType, stake }),
-    })
-    if (!response.ok) {
-      setError(await response.text())
-      return
-    }
-    const body: StartGameResponse = await response.json()
-    setSessionId(body.sessionId)
-    setMatchId('')
-    setActiveMode('practice')
-    setClickedLineIds([])
-    setLines(normalizeLines(body.lines))
-    setMessage('Server-generated Maze Arena board ready. Clear arrows only when their forward path can leave the board.')
-  }
-
-  async function joinPvP(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
     setMessage('')
-    setError('')
-    const headers = authHeaders()
-    if (!headers) return
-    const response = await fetch(`${apiBase}/api/v1/pvp/join`, {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ queueType, walletType, stake }),
-    })
-    if (!response.ok) {
-      setError(await response.text())
-      return
+    try {
+      const response = await postJSON<StartGameResponse>('/api/v1/games/start', { gameType: 'demo', stake: 1 })
+      setActiveGame(game)
+      setSessionId(response.sessionId)
+      setGenerationHash(response.generationHash)
+      setDifficulty(response.difficultyRating)
+      setClickedLineIds([])
+      setLines(normalizeLines(response.lines))
+      setMessage('The server generated and signed this Practice puzzle.')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Practice could not be started.')
+    } finally {
+      setBusy(false)
     }
-    const detail: PvPMatchDetail = await response.json()
-    if (detail.match.playerAId === detail.match.playerBId) {
-      setError('Self-match prevented. Requeue before starting.')
-      return
-    }
-    setMatch(detail)
-    setMessage(detail.match.status === 'active' ? 'PvP match active. Clear all arrow lines before your opponent.' : 'Queued. Waiting for an opponent.')
-  }
-
-  function setMatch(detail: PvPMatchDetail) {
-    setMatchId(detail.match.id)
-    setSessionId('')
-    setActiveMode('pvp')
-    setClickedLineIds([])
-    setLines(normalizeLines(detail.match.playerAId === currentUserId ? detail.match.playerALines : detail.match.playerBLines))
   }
 
   function clickLine(lineId: string) {
@@ -131,104 +60,77 @@ export default function GamesPage() {
         if (line.id !== lineId || line.state === 'removed' || line.state === 'blocked' || line.state === 'exiting') return line
         setClickedLineIds((clicks) => [...clicks, lineId])
         if (blocker) {
-          window.setTimeout(() => {
-            setLines((latest) => latest.map((item) => item.id === lineId && item.state === 'blocked' ? { ...item, state: 'ready' } : item))
-          }, 760)
+          window.setTimeout(() => setLines((latest) => latest.map((item) => item.id === lineId && item.state === 'blocked' ? { ...item, state: 'ready' } : item)), 760)
           return { ...line, state: 'blocked' }
         }
-        window.setTimeout(() => {
-          setLines((latest) => latest.map((item) => item.id === lineId && item.state === 'exiting' ? { ...item, state: 'removed' } : item))
-        }, 620)
+        window.setTimeout(() => setLines((latest) => latest.map((item) => item.id === lineId && item.state === 'exiting' ? { ...item, state: 'removed' } : item)), 620)
         return { ...line, state: 'exiting' }
       })
     })
   }
 
-  async function submitBoard() {
-    setMessage('')
+  async function submitPractice() {
+    setBusy(true)
     setError('')
-    const headers = authHeaders()
-    if (!headers) return
-    const endpoint = activeMode === 'pvp' ? `${apiBase}/api/v1/pvp/submit` : `${apiBase}/api/v1/games/finish`
-    const body = activeMode === 'pvp' ? { matchId, moves: clickedLineIds } : { sessionId, clickedLineIds }
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (!response.ok) {
-      setError(await response.text())
-      return
-    }
-    const result = await response.json()
-    if (activeMode === 'practice') {
-      setLines(normalizeLines(result.session?.lines))
-      setMessage(`Board submitted: ${result.session?.outcome ?? 'pending'}.`)
-    } else {
-      setMessage(result.match?.status === 'completed' ? `PvP completed. Winner: ${result.match.winnerId || 'refund'}.` : 'PvP clicks submitted. Waiting for opponent.')
+    try {
+      const response = await postJSON<FinishGameResponse>('/api/v1/games/finish', { sessionId, clickedLineIds })
+      setLines(normalizeLines(response.session.lines))
+      setMessage(`The server recorded this Practice result as ${response.session.outcome || 'pending'}.`)
+      await reload()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'The Practice result could not be verified.')
+    } finally {
+      setBusy(false)
     }
   }
 
+  if (status === 'loading' || status === 'idle') return <main className="hub-page"><div className="inline-loading">Loading registered game modules...</div></main>
+  if (!data) return <main className="hub-page"><div className="form-message error">{hubError || 'Game catalog is unavailable.'}</div></main>
+
   return (
-    <main className="page-shell">
-      <section className="dashboard-command">
-        <div>
-          <span className="eyebrow">Arena Hub</span>
-          <h1>Choose your arena.</h1>
-          <p>Enter a game module from Skill Arena. Wallet, profile, trust, and overall progression stay with Arena Hub.</p>
-        </div>
+    <main className="hub-page">
+      <section className="subpage-heading">
+        <div><span className="eyebrow">Game directory</span><h1>Choose the skill to sharpen.</h1><p>Modules and capabilities come from Arena Core. Only server-authorized modes can be entered.</p></div>
+        <Gamepad2 aria-hidden="true" />
       </section>
-      {error ? <p className="form-error">{error}</p> : null}
-      {message ? <p className="form-success">{message}</p> : null}
 
-      <section className="content-grid">
-        <article className="panel">
-          <span className="eyebrow">Maze Arena</span>
-          <h2>Maze module</h2>
-          <button className="button secondary" type="button" onClick={startServerBoard}>Start Server Board</button>
-          <form onSubmit={joinPvP} className="form-grid">
-            <label>Queue<select value={queueType} onChange={(event) => setQueueType(event.target.value)}><option value="ranked">Ranked</option><option value="casual">Casual</option></select></label>
-            <label>Wallet<select value={walletType} onChange={(event) => setWalletType(event.target.value)}><option value="demo">Demo</option><option value="live">Live</option></select></label>
-            <label>Stake<input type="number" min="1" value={stake} onChange={(event) => setStake(Number(event.target.value))} /></label>
-            <button className="button" type="submit">Find PvP Match</button>
-          </form>
-          <div className="match-list">
-            {pvpMatches.slice(0, 3).map((detail) => (
-              <button key={detail.match.id} type="button" onClick={() => setMatch(detail)}>
-                {detail.match.queueType} - {detail.match.status} - {detail.match.stake} {detail.match.walletType}
-              </button>
-            ))}
-          </div>
-        </article>
+      {error ? <p className="form-message error" role="alert">{error}</p> : null}
+      {message ? <p className="form-message success" role="status">{message}</p> : null}
 
-        <article className="panel-large">
-          <div className="arena-stage">
-            <div className="puzzle-panel">
-              <div className="panel-heading">
-                <div><span className="eyebrow">Player Maze</span><h2>{progress}% clear</h2></div>
-                <strong>{lines.length - removedCount} lines left</strong>
+      <section className="module-directory">
+        {data.games.map((game) => (
+          <article key={game.id} className={activeGame?.id === game.id ? 'active' : ''}>
+            <div className="module-mark" aria-hidden="true">{game.name.split(' ').map((part) => part[0]).join('').slice(0, 2)}</div>
+            <div>
+              <span>{game.category} · v{game.version}</span>
+              <h2>{game.name}</h2>
+              <p>{game.description}</p>
+              <div className="capability-list">
+                {Object.entries(game.capabilities).filter(([, enabled]) => enabled).map(([capability]) => <span key={capability}>{capability}</span>)}
               </div>
-              <button className="button" type="button" disabled={clickedLineIds.length === 0 || (activeMode === 'practice' && !sessionId) || (activeMode === 'pvp' && !matchId)} onClick={submitBoard}>Submit Click Replay</button>
-              <ArrowLinePuzzle lines={lines.filter((line) => line.state !== 'removed')} label="Player arrow line maze" onLineClick={clickLine} />
+              <ul>{game.rulesSummary.map((rule) => <li key={rule}>{rule}</li>)}</ul>
             </div>
-            <div className="opponent-panel">
-              <div className="panel-heading">
-                <div><span className="eyebrow">Opponent Maze</span><h2>{opponentProgress}% clear</h2></div>
-                <strong>{Math.max(0, Math.round(lines.length * (1 - opponentProgress / 100)))} est. left</strong>
-              </div>
-              <div className="pixelated">
-                <ArrowLinePuzzle lines={opponentLines} label="Pixelated hidden opponent maze" readOnly />
-              </div>
-              <div className="opponent-stats">
-                <span>Opponent Progress {opponentProgress}%</span>
-                <span>Estimated Moves Remaining {Math.max(0, Math.round(lines.length * (1 - opponentProgress / 100)))}</span>
-                <span>Current Combo {Math.max(0, removedCount - blockedCount)}</span>
-                <span>Accuracy {clickedLineIds.length === 0 ? 100 : Math.round((removedCount / clickedLineIds.length) * 100)}%</span>
-              </div>
+            <div className="module-actions">
+              {game.availability === 'available' && game.capabilities.practice ? <button className="button" type="button" disabled={busy} onClick={() => void startPractice(game)}><Play />Start Practice</button> : <span className="module-lock"><LockKeyhole />{game.availabilityReason || 'Practice is not supported.'}</span>}
+              {game.capabilities.pvp ? <span className="module-lock"><ShieldCheck />Ranked entry is unavailable until live matchmaking is enabled.</span> : null}
             </div>
-          </div>
-        </article>
+          </article>
+        ))}
       </section>
+
+      {activeGame && lines.length ? (
+        <section className="practice-stage" aria-labelledby="practice-title">
+          <div className="practice-heading">
+            <div><span className="eyebrow">Server Practice</span><h2 id="practice-title">{activeGame.name}</h2><p>Difficulty {difficulty} · Generation {generationHash.slice(0, 12)}</p></div>
+            <div><strong>{progress}%</strong><span>{lines.length - removedCount} arrows remain</span></div>
+          </div>
+          <ArrowLinePuzzle lines={lines.filter((line) => line.state !== 'removed')} label={`${activeGame.name} Practice puzzle`} onLineClick={clickLine} />
+          <div className="practice-actions">
+            <button className="button secondary" type="button" disabled={busy} onClick={() => void startPractice(activeGame)}><RotateCcw />New puzzle</button>
+            <button className="button" type="button" disabled={busy || clickedLineIds.length === 0} onClick={() => void submitPractice()}><Check />Verify result</button>
+          </div>
+        </section>
+      ) : null}
     </main>
   )
 }

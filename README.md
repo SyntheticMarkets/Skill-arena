@@ -359,44 +359,41 @@ Required foundation work:
 - Remove client-estimated statistics and all fake activity.
 - Complete profile management, route protection, loading, error, empty, and recovery states.
 
-### Sprint 3: Wallet, Deposits, Withdrawals, And Treasury
+### Sprint 3: Financial Platform
 
-Visible outcome: players can inspect balances, add and manage payment methods, deposit, withdraw, follow pending states, view history and statements, and understand limits.
+Visible outcome: players can understand and control their complete financial relationship with Skill Arena through a provider-independent wallet, deposit and withdrawal lifecycles, limits, financial assessment, responsible gaming controls, and transparent status timelines.
 
 Required foundation work:
 
 - Convert all money to integer minor units or an approved fixed-decimal type.
 - Implement transactional PostgreSQL wallet, ledger, payment, withdrawal, treasury, and idempotency repositories.
-- Integrate approved live payment providers behind the provider interface.
+- Complete Player Wallet balances, pending funds, transaction history, statements, limits, verification status, and payment-method presentation.
+- Implement Payment Core, a provider registry, and provider-neutral Card, EFT, and Bank Transfer contracts. Future providers, including crypto where legally approved, must not require Wallet redesign.
+- Integrate approved live payment providers behind Payment Core; Wallet must never branch on provider identity.
 - Verify signed webhooks and make settlement idempotent.
-- Complete AML, risk, treasury approval/rejection, reconciliation, reserve validation, and immutable audit flows.
+- Implement the withdrawal lifecycle: Requested -> Pending Review -> Approved -> Processing -> Completed, or Rejected.
+- Implement the policy decision boundary: request -> policy engine -> Trust Score and rules -> manual review or auto-approval -> Treasury -> provider settlement.
+- Initial production policy is 100% manual approval. The player always sees Pending Review and never sees or controls internal approval logic.
+- Complete financial assessment, country and age rules, source-of-funds fields where legally required, responsible gaming, cooling-off, self-exclusion, and daily/monthly deposit and withdrawal limits.
+- Complete KYC evidence storage, AML, risk, treasury approval/rejection, reconciliation, reserve validation, and immutable audit flows.
+- Expose role-protected approval and rejection APIs for the future Admin CRM, but implement no CRM screens in the player application.
 - Store statements and exports in production object storage.
 - Prove end-to-end cent-level reconciliation and provider failure recovery.
 
-### Sprint 4: Verification, Financial Assessment, KYC, And Trust
+### Sprint 4: Admin CRM
 
-Visible outcome: players understand their verification status, requirements, limits, evidence, review state, and Trust progression.
-
-Required foundation work:
-
-- Implement KYC evidence upload through object storage.
-- Complete country rules, financial assessment, manual review, escalation, rejection, and request-more-information paths.
-- Enforce role-separated compliance decisions and immutable audit history.
-- Connect verification and Trust status to wallet limits and competitive eligibility.
-
-### Sprint 5: Operations Portal
-
-Visible outcome: authorized staff can safely manage users, approvals, support, disputes, treasury, fraud signals, audit records, and operational health.
+Visible outcome: authorized staff use a separate application, authentication surface, navigation model, permission system, and deployment boundary to manage users, withdrawals, deposits requiring review, KYC, financial assessments, support, tournaments, moderation, treasury, reconciliation, fraud signals, announcements, compliance, and audit records.
 
 Required foundation work:
 
+- Create a separate CRM application. Do not add CRM pages or navigation to the player Next.js application.
 - Replace broad role ranking with explicit permissions and separation of duties.
 - Complete treasury, fraud, compliance, support, and super-admin workflows.
 - Implement tamper-evident audit records and evidence retention.
 - Add safe administrative session controls and mandatory MFA reauthentication for sensitive actions.
 - Complete production observability, alerts, worker/queue monitoring, and operational runbooks.
 
-### Sprint 6: Session Gateway, Presence, Notifications, And Realtime Events
+### Sprint 5: Session Gateway, Presence, Notifications, And Realtime Events
 
 Visible outcome: players receive authenticated live presence, match, notification, and reconnect events across the platform.
 
@@ -407,7 +404,7 @@ Required foundation work:
 - Implement reconnect, resume, heartbeats, ordering, deduplication, backpressure, and graceful dependency failure.
 - Load-test concurrent connections and chaos-test Redis, PostgreSQL, and gateway failure behavior.
 
-### Sprint 7: Maze Arena
+### Sprint 6: Maze Arena
 
 Visible outcome: Practice, Ranked, Daily Challenge, and Replay provide deterministic, satisfying, server-authoritative Maze competition.
 
@@ -420,7 +417,7 @@ Required foundation work:
 - Store immutable replay artifacts in object storage and support verification, playback, and disputes.
 - Prove deterministic reconstruction and gameplay parity through integration and end-to-end tests.
 
-### Sprint 8: Tournaments, Leaderboards, Seasons, And Rewards
+### Sprint 7: Tournaments, Leaderboards, Seasons, And Rewards
 
 Visible outcome: players can qualify, compete, follow brackets and rankings, receive auditable rewards, and understand seasonal progress.
 
@@ -4259,6 +4256,95 @@ Arena Core v1.0 is an extension boundary, not a rewrite target. Future work shou
 
 Arena Hub is the authenticated player home for Skill Arena. A player logs into Skill Arena, not into an individual game.
 
+### Sprint 2 Implementation Status
+
+Status: Frozen as `sprint-2-v1.0-freeze` after the final regression audit.
+
+The Arena Hub runtime is a server-backed player command surface. It contains no admin navigation, fabricated statistics, fixed player counts, simulated tournaments, or client-owned progression state.
+
+Implemented player surfaces:
+
+- Dynamic welcome, overall level, XP, league, rating, Trust Score, wallet summary, and unread notification count.
+- Server-derived recommended action, daily objectives, competition eligibility, locked-state reasons, recent activity, and resumable activity.
+- Capability-driven game directory loaded from the Arena Core registry.
+- Read-only wallet summary and recorded ledger history.
+- Editable competitor profile with server-side username, display name, country, language, and curated avatar validation.
+- Durable notification center with all/unread/read/archived views.
+- Support guidance, contact route, durable support-ticket creation, and ticket history.
+- Server-backed settings for MFA status, sessions, devices, and owned revocation.
+- Honest empty states when no tournament, replay, activity, notification, or transaction exists.
+
+Access rules:
+
+| Identity state | Available |
+|---|---|
+| Guest | Landing, game catalog and rules, public leaderboard, registration, and authentication |
+| Registered and verified | Arena Hub, Practice, profile, notifications, support, wallet status, replay history, settings |
+| Live eligible | Ranked/live capabilities only when backend KYC, account, profile, and competition rules approve entry |
+| Privileged staff | No player-application admin UI; operations tooling remains a separate future application |
+
+The frontend sends browser requests with protected cookies through `app/lib/api.ts`. Hub state is refreshed after player mutations. It does not poll. Notification creation is written to an append-only `notification_events` stream so the future Session Gateway can deliver updates without changing notification ownership or REST contracts.
+
+Persistence:
+
+- PostgreSQL production tables: `player_profiles`, `progression`, `game_modules`, `player_notifications`, `notification_events`, and `support_tickets`.
+- Local development fallback: `arena_hub.json`.
+- Profile updates synchronize `users` and `player_profiles` in one PostgreSQL transaction.
+- Notification creation writes the notification and delivery event in one PostgreSQL transaction.
+- Creating a support ticket emits a durable owned notification backed by the notification event stream.
+- Game metadata is synchronized from registered Arena Core manifests; pages do not maintain a second game catalog.
+
+Out of scope for this slice:
+
+- Payment execution, deposits, withdrawals, and payment methods.
+- KYC evidence capture and financial assessment.
+- WebSocket delivery and presence.
+- Authoritative ranked gameplay, tournament entry/brackets, and new game modules.
+- Admin CRM.
+
+### Sprint 2 Validation Report
+
+Validation date: 2026-07-23.
+
+| Gate | Status | Evidence |
+|---|---|---|
+| Design | Pass | Responsive Hub, Profile, Notifications, and Support proof captured for desktop, tablet, and mobile under `docs/proof/sprint-2-arena-hub/`. |
+| Frontend | Pass | Dynamic Hub, player navigation, catalog, wallet status, challenges, tournaments, replay history, profile, settings, notifications, support, and honest empty/error/loading states use versioned APIs. |
+| Backend | Pass | Normalized Arena Hub repositories, aggregate state, game registry sync, profile persistence, durable notifications/events, and support tickets are implemented. |
+| Security | Pass | All private routes require an owned session; notification ownership, profile input, avatar allowlist, support categories, and cross-account denial are covered by integration tests. |
+| API | Pass | Public and protected `/api/v1` contracts, examples, access rules, and errors are documented in this README. |
+| Tests | Pass | `go test ./...`, PostgreSQL restart integration, Vitest, and the desktop/tablet/mobile Playwright journey pass. |
+| Production | Pass for Sprint 2 code | `go vet ./...`, `go build ./...`, ESLint, TypeScript, and the Next.js production build pass. Production still requires deployment configuration and credentials. |
+| Freeze | Pass | Final regression audit passed; the release is committed and tagged `sprint-2-v1.0-freeze`. |
+
+Verification results:
+
+- Go full suite: all packages passed; the database package completed in 129.995 seconds and server package in 9.244 seconds.
+- PostgreSQL 17: fresh-cluster migration, normalized writes, restart persistence, notification event history, and support/game metadata checks passed.
+- Go static/build: `go vet ./...` and `go build ./...` exited successfully.
+- Frontend unit tests: 3 files and 4 tests passed.
+- Frontend coverage baseline: 25.55% statements overall for the configured Sprint 1 and Hub scope; Dashboard is 72% and API helpers are 73.8%.
+- Frontend static/build: ESLint passed with zero warnings, TypeScript passed, and Next.js generated all 23 player routes.
+- Browser validation: all 15 Sprint 1 authentication and Sprint 2 Hub tests passed in desktop Chromium, tablet Chromium, and mobile Chromium.
+- Browser proof: 12 full-page screenshots cover Dashboard, Profile, Notifications, and Support across all three viewports. Three complete journey videos are retained beside them.
+
+Known deployment configuration:
+
+- Set `SKILL_ARENA_SUPPORT_EMAIL` to the approved production support address.
+- Run migration `003_arena_hub.sql` during deployment.
+- The Session Gateway will consume `notification_events` in its scheduled slice; the Hub does not poll.
+
+Final regression audit:
+
+- Frozen Sprint 1 authentication UI, context, and E2E source files are unchanged.
+- Registration, email verification, login, forgot/reset password, MFA enrollment, MFA login, recovery codes, session recovery, and logout all pass on desktop, tablet, and mobile.
+- Seventeen player API routes consumed by the Hub were confirmed registered in `server.go` and documented in this README.
+- The player frontend contains no Admin API call, navigation item, CRM component, or `/admin` route.
+- Fresh PostgreSQL 17 migration and restart persistence passed again.
+- The E2E test server uses elevated test-only login/register limits because all 15 tests share one loopback IP; production rate limits and their backend tests are unchanged.
+
+Freeze decision: **SPRINT 2 APPROVED AND FROZEN.** Sprint 3 remains unimplemented until its planning and approval workflow begins.
+
 ### Arena Hub Owns
 
 - Wallet
@@ -4937,9 +5023,101 @@ Successful login/session recovery returns non-secret identity state:
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/v1/profile` | Current player profile |
+| POST | `/api/v1/profile` | Update owned competitor profile |
 | GET | `/api/v1/progression` | XP, level, league, trust |
 | GET | `/api/v1/achievements` | Player achievements |
 | GET | `/api/v1/achievements/catalog` | Static achievement catalog |
+
+### Arena Hub
+
+| Method | Path | Authentication | Purpose |
+|---|---|---|---|
+| GET | `/api/v1/catalog/games` | Public | Registered game metadata, capabilities, availability, and rules summary |
+| GET | `/api/v1/catalog/games/{id}` | Public | One registered game contract |
+| GET | `/api/v1/hub` | Player | Aggregate owned Hub state |
+| GET | `/api/v1/notifications?status=` | Player | Owned notifications; status may be unread, read, or archived |
+| POST | `/api/v1/notifications/read` | Player | Mark one owned notification read |
+| POST | `/api/v1/notifications/archive` | Player | Archive one owned notification |
+| GET | `/api/v1/support/content` | Public | Support articles and configured contact destination |
+| GET | `/api/v1/support/tickets` | Player | Owned support-ticket history |
+| POST | `/api/v1/support/tickets` | Player | Create an owned support ticket |
+
+`GET /api/v1/hub` returns server-derived state:
+
+```json
+{
+  "generatedAt": "2026-07-23T06:00:00Z",
+  "profile": {
+    "userId": "player-id",
+    "username": "competitor",
+    "displayName": "Competitor",
+    "country": "ZA",
+    "language": "en"
+  },
+  "progression": {
+    "xp": 0,
+    "level": 1,
+    "eloRating": 1200,
+    "leagueTier": "Bronze",
+    "trustScore": 100
+  },
+  "wallet": {
+    "currency": "USD",
+    "availableBalance": 0,
+    "pendingDeposits": 0,
+    "pendingWithdrawals": 0
+  },
+  "notifications": {"unread": 0, "total": 0},
+  "objectives": [],
+  "recommendedAction": {
+    "id": "practice",
+    "label": "Enter Practice",
+    "actionUrl": "/games"
+  },
+  "recentActivity": [],
+  "tournaments": [],
+  "challenges": [],
+  "games": [],
+  "eligibility": {
+    "emailVerified": true,
+    "profileComplete": false,
+    "mfaEnabled": false,
+    "walletVisible": true,
+    "liveEligible": false,
+    "blockers": ["Complete your competitor profile."]
+  }
+}
+```
+
+Profile update request:
+
+```json
+{
+  "username": "competitor_1",
+  "displayName": "Competitor One",
+  "avatarUrl": "strategist",
+  "country": "ZA",
+  "language": "en"
+}
+```
+
+Notification state request:
+
+```json
+{"notificationId":"notification-id"}
+```
+
+Support ticket request:
+
+```json
+{
+  "category": "account",
+  "subject": "Account question",
+  "message": "The support team needs enough detail to investigate this request."
+}
+```
+
+Supported ticket categories are `account`, `security`, `gameplay`, `wallet`, and `responsible_gaming`. Player-owned endpoints return `401` without a valid session, `400` for invalid contracts, and `404` when an owned notification does not exist.
 
 ### Seasons
 
@@ -5122,7 +5300,7 @@ Production database: PostgreSQL.
 
 Development fallback: JSON files under `backend/data/`, ignored from Git.
 
-Migration source: `backend/migrations/001_create_tables.sql`.
+Migration sources: `backend/migrations/001_create_tables.sql`, `002_auth_normalized.sql`, and `003_arena_hub.sql`.
 
 ### Core Tables
 
@@ -5153,6 +5331,11 @@ Migration source: `backend/migrations/001_create_tables.sql`.
 | `treasury_state` | Treasury reserve state |
 | `store_snapshots` | Intermediate production persistence snapshot |
 | `financial_idempotency` | Idempotency records for money movement |
+| `player_profiles` | Public competitor identity and presentation preferences |
+| `game_modules` | Arena Core manifest metadata and capability flags |
+| `player_notifications` | Durable owned notification state |
+| `notification_events` | Append-only notification delivery/event stream |
+| `support_tickets` | Durable player support requests |
 
 ### Money Tables
 
@@ -5204,10 +5387,16 @@ Important indexes:
 - `idx_pvp_matches_queue`
 - `idx_background_jobs_status`
 - `idx_financial_idempotency_user_operation`
+- `idx_player_profiles_username_lower`
+- `idx_progression_rank`
+- `idx_game_modules_availability`
+- `idx_notifications_user_status_created`
+- `idx_notification_events_user_sequence`
+- `idx_support_tickets_user_updated`
 
 ### Repository Note
 
-At freeze, PostgreSQL is authoritative through `store_snapshots` plus financial idempotency tables. This is intentionally transitional. The domain store API isolates callers so each subsystem can later be normalized into dedicated repositories.
+At freeze, PostgreSQL is authoritative. Authentication and Arena Hub domains use normalized repositories. Older domains continue through `store_snapshots` plus dedicated financial idempotency tables. This is intentionally transitional. The domain store API isolates callers so each remaining subsystem can later be normalized without changing handlers or business workflows.
 
 ---
 
@@ -5256,6 +5445,7 @@ Required production environment:
 - `SKILL_ARENA_ALLOWED_ORIGINS`
 - `SKILL_ARENA_COOKIE_SECURE=true`
 - `SKILL_ARENA_PUBLIC_BASE_URL=https://...`
+- `SKILL_ARENA_SUPPORT_EMAIL=support@...`
 - `SKILL_ARENA_EMAIL_OUTBOX_ONLY=false`
 - `SKILL_ARENA_SMTP_HOST`
 - `SKILL_ARENA_SMTP_PORT`
