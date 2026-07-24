@@ -53,6 +53,84 @@ Skill Arena is delivered as vertical production slices. Product implementation a
 
 Do not create frontend placeholders that depend on unfinished backend work. Do not build infrastructure without connecting it to the product outcome that requires it.
 
+### Release 1.0 Architecture
+
+Status: **Stable core established; Sprint 4 planning is next.**
+
+Release 1.0 is organized as independently owned product domains. A frozen domain may receive bug fixes, security fixes, performance work, scalability work, or integration support, but its business contract may not be silently redesigned by a later sprint.
+
+```text
+Skill Arena Release 1.0
+|
++-- Sprint 1: Identity & Security             [FROZEN]
+|   `-- tag: sprint-1-v1.0-freeze
+|
++-- Sprint 2: Player Platform / Arena Hub     [FROZEN]
+|   `-- tag: sprint-2-v1.0-freeze
+|
++-- Sprint 3: Financial Platform              [FROZEN]
+|   `-- tag: sprint-3-v1.0-freeze
+|
++-- Sprint 4: Admin CRM                       [NOT STARTED - PLANNING GATE]
+|
++-- Sprint 5: Realtime Arena                  [PLANNED]
+|
++-- Sprint 6: Maze Arena                      [PLANNED]
+|
++-- Sprint 7: Competition Platform            [PLANNED]
+|   `-- Seasons, tournaments, leaderboards, and rewards
+|
+`-- Sprint 8: Production Launch               [PLANNED]
+```
+
+| Sprint | Domain | Release responsibility | Status |
+|---|---|---|---|
+| 1 | Identity & Security | Registration, verification, authentication, MFA, sessions, devices, and account recovery | Frozen |
+| 2 | Player Platform | Arena Hub, navigation, player profile, notifications, support entry, and game discovery | Frozen |
+| 3 | Financial Platform | Wallet, ledger, deposits, withdrawals, limits, assessments, responsible gaming, Payment Core, and Treasury contracts | Frozen |
+| 4 | Admin CRM | Separate staff identity, permissions, operations, compliance, finance, support, audit, and monitoring application | Not started - planning gate |
+| 5 | Realtime Arena | Authenticated gateway, presence, live events, reconnect, ordering, and distributed coordination | Planned |
+| 6 | Maze Arena | Deterministic puzzle pipeline, authoritative gameplay, PvP, replay, and game-specific presentation | Planned |
+| 7 | Competition Platform | Tournament, season, leaderboard, reward, spectator, dispute, and competition settlement lifecycles | Planned |
+| 8 | Production Launch | Provider certification, jurisdiction approval, deployment, disaster recovery, load, chaos, security, and launch-candidate verification | Planned |
+
+#### Domain Boundaries
+
+```text
+Player Platform ----\
+                     \
+Admin CRM ------------> Versioned API and event contracts
+                       |
+                       v
+                Platform Domains
+             / Identity & Security
+            /  Financial Platform
+           /   Realtime Arena
+          /    Game and Competition Platform
+         v
+PostgreSQL | Redis | Object Storage | Email | Payment Providers
+```
+
+- The Player Platform and Admin CRM are separate applications, security surfaces, navigation systems, and deployment units.
+- Identity & Security is the authority for users, staff identities, sessions, MFA, devices, and revocation.
+- The Financial Platform is the authority for money, Payment Core routing, ledger state, Treasury state, financial policy, and settlement.
+- Admin CRM may operate frozen domains only through explicit, permission-protected APIs. It may not edit wallets directly or bypass financial state machines.
+- Realtime Arena owns authenticated live transport and presence. Games consume its contracts instead of creating private transport layers.
+- Arena Core owns game-agnostic sessions, actions, capabilities, versions, and replay contracts. Maze Arena remains Game Module 1.
+- The Competition Platform consumes authoritative game outcomes and Financial Platform settlement contracts; it does not calculate or credit money independently.
+- PostgreSQL stores authoritative transactional state, Redis stores ephemeral distributed state, and S3-compatible object storage stores durable growing artifacts.
+- External providers remain behind domain interfaces. Player and CRM clients must not branch on payment, identity, email, or storage provider identity.
+
+#### Release Rules
+
+1. Only the current sprint may add business functionality.
+2. Planning, wireframes, and high-fidelity UX approval precede implementation.
+3. Every administrative action must be authenticated, permission-checked, attributable, and immutable in audit history.
+4. Every financial transition must remain idempotent, transactional, provider-neutral, and reconcilable in integer minor units.
+5. Every live game outcome must remain server-authoritative, deterministic, replayable, and versioned.
+6. A sprint freezes only after its design, frontend, backend, security, API, tests, production, and evidence gates pass.
+7. Sprint 8 may approve Release 1.0 only after all deployment tasks, external approvals, load tests, chaos tests, backup restore, disaster recovery, and launch-candidate checks pass.
+
 ### Production Slice Rule
 
 A page or module is complete only when all eight gates pass:
@@ -654,6 +732,22 @@ Required foundation work:
 - Validate leaderboard calculations and reward eligibility through durable workers.
 - Settle entries, prizes, refunds, and rewards through the transactional wallet and treasury flow.
 - Add spectator, dispute, replay, recovery, and operational controls required by live competition.
+
+### Sprint 8: Production Launch
+
+Visible outcome: the approved Release 1.0 candidate operates from production infrastructure with certified external services, proven recovery, measured capacity, and no unresolved launch blockers.
+
+Required launch work:
+
+- Certify and activate the commercially selected payment provider adapters without changing the frozen Financial Platform contract.
+- Complete jurisdiction, legal, KYC/AML, responsible-gaming, privacy, retention, terms, and fair-play approvals.
+- Supply production secrets through the approved secret manager and verify that no credentials exist in source, images, logs, fixtures, or client bundles.
+- Deploy independently scalable Player Platform, Admin CRM, API, workers, Realtime Arena, PostgreSQL, Redis, and S3-compatible storage units.
+- Prove production email, payment callbacks, object storage, queues, workers, observability, alerting, backup, restore, and disaster recovery.
+- Run representative and peak load tests for authentication, CRM operations, wallet settlement, live matches, replay delivery, matchmaking, leaderboards, and tournaments.
+- Run dependency and network chaos tests for PostgreSQL, Redis, object storage, email, payment providers, workers, and realtime gateways.
+- Complete penetration testing, dependency review, privilege review, financial reconciliation, replay-integrity review, accessibility review, and launch-candidate regression.
+- Produce the Release 1.0 runbooks, ownership matrix, incident procedures, rollback plan, support escalation paths, and final launch recommendation.
 
 ### Sprint Workflow
 
