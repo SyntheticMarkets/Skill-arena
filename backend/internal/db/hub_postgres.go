@@ -779,7 +779,11 @@ func (s *Store) BuildHubSnapshot(ctx context.Context, userID string) (*models.Hu
 	if err != nil {
 		return nil, err
 	}
-	wallet, err := s.GetWalletByUserID(ctx, userID)
+	wallet, err := s.GetFinancialWallet(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	assessment, err := s.GetFinancialAssessment(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -816,6 +820,9 @@ func (s *Store) BuildHubSnapshot(ctx context.Context, userID string) (*models.Hu
 	if !profileComplete {
 		blockers = append(blockers, "Complete your competitor profile.")
 	}
+	if assessment.Status != models.AssessmentStatusComplete {
+		blockers = append(blockers, "Complete financial assessment before entering live competition.")
+	}
 	eligibility := models.HubEligibility{
 		EmailVerified:   user.EmailVerified,
 		ProfileComplete: profileComplete,
@@ -830,12 +837,6 @@ func (s *Store) BuildHubSnapshot(ctx context.Context, userID string) (*models.Hu
 	for _, session := range s.sessions {
 		if session.UserID == userID {
 			sessions = append(sessions, *session)
-		}
-	}
-	pendingDeposits := 0.0
-	for _, payment := range s.payments {
-		if payment.UserID == userID && payment.Status != models.PaymentStatusSettled && payment.Status != models.PaymentStatusFailed {
-			pendingDeposits += payment.Amount
 		}
 	}
 	tournaments := make([]models.Tournament, 0, len(s.tournaments))
@@ -943,10 +944,10 @@ func (s *Store) BuildHubSnapshot(ctx context.Context, userID string) (*models.Hu
 		Profile:     *profile,
 		Progression: *progression,
 		Wallet: models.HubWalletSummary{
-			Currency:           "USD",
-			AvailableBalance:   maxFloat(0, wallet.LiveBalance-wallet.LiveLockedBalance-wallet.PendingWithdrawals),
-			PendingDeposits:    pendingDeposits,
-			PendingWithdrawals: wallet.PendingWithdrawals,
+			Currency:           wallet.Currency,
+			AvailableBalance:   float64(wallet.AvailableMinor) / 100,
+			PendingDeposits:    float64(wallet.PendingDepositMinor) / 100,
+			PendingWithdrawals: float64(wallet.PendingWithdrawalMinor) / 100,
 			AccountStatus:      user.Status,
 			VerificationStatus: user.KYCStatus,
 		},

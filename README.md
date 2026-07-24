@@ -363,6 +363,8 @@ Required foundation work:
 
 Visible outcome: players can understand and control their complete financial relationship with Skill Arena through a provider-independent wallet, deposit and withdrawal lifecycles, limits, financial assessment, responsible gaming controls, and transparent status timelines.
 
+Implementation status: **COMPLETE AND APPROVED**. The approved freeze is identified by the annotated tag `sprint-3-v1.0-freeze`. Sprint 4 has not begun.
+
 Required foundation work:
 
 - Convert all money to integer minor units or an approved fixed-decimal type.
@@ -380,18 +382,242 @@ Required foundation work:
 - Store statements and exports in production object storage.
 - Prove end-to-end cent-level reconciliation and provider failure recovery.
 
+#### Sprint 3 Validation Report
+
+Validation date: 2026-07-24.
+
+Sprint 3 is approved for feature freeze. Payment-provider onboarding is a post-freeze deployment milestone. Sprint 4 has not begun.
+
+| Gate | Status | Evidence |
+|---|---|---|
+| Design | Pass | Wallet Overview, Deposit, Withdraw, Activity, Limits, and Assessment form one responsive player workspace. No approval, treasury, fraud, or KYC-review control exists in the player application. |
+| Frontend | Pass | All money and lifecycle state comes from `/api/v1/financial`; loading, error, empty, policy-gated, evidence-upload, export, and responsible-gaming states are implemented. |
+| Backend | Pass | Normalized PostgreSQL financial repositories, integer minor units, provider-neutral Payment Core, serializable settlement, manual withdrawal approval, provider balance checks, reserve gates, evidence, artifacts, and immutable journals are implemented. |
+| Security | Pass | Financial writes require authentication, CSRF protection, verified email, completed eligibility, jurisdiction policy, limits, and idempotency. Adapter-owned signatures are verified before parsing; callback replay and contract mismatches fail closed. Provider routing and internal policy data are not serialized to players. |
+| API | Pass | Player, generic provider callback, artifact, evidence, future-CRM transition, payout-destination, and reconciliation routes are versioned and documented below. |
+| Tests | Pass | Provider contract, routing, health failover, lifecycle, HTTP integration, PostgreSQL, object-storage, frontend, and responsive regression suites pass. |
+| Production | Platform complete; selected adapter pending | Production startup requires an explicitly active, configured provider adapter plus SMTP, PostgreSQL, Redis, and S3-compatible credentials. Provider selection is a deployment and commercial decision. |
+| Freeze | Approved | The provider-independent Financial Platform passed final regression validation and is frozen at `sprint-3-v1.0-freeze`. |
+
+Verification results:
+
+- `go test ./... -count=1`: all packages passed; the final database package completed in 121.986 seconds and the server package in 8.331 seconds.
+- Fresh disposable PostgreSQL 17 on an isolated local port: authentication, Arena Hub, migrations `004_financial_platform.sql` and `005_financial_completion.sql`, exact provider-neutral deposit transitions, settlement, evidence, payout destination, reserve audit, exact minor-unit balance, and journal verification passed. The cluster was stopped and removed after validation.
+- `go vet ./...` and `go build ./...`: passed.
+- Go coverage: 33.3% repository-wide; database 39.3%, Payment Core 63.1%, server 95.4%, and storage 63.4%.
+- Real S3-compatible lifecycle: a checksum-verified MinIO server accepted signed bucket health, PUT, GET, integrity comparison, and DELETE operations.
+- Vitest: 4 files and 6 tests passed; repository-wide frontend statement coverage is 25.78%.
+- ESLint: passed with zero warnings. TypeScript: passed. Next.js 16.2.11 production build: passed with 23 generated routes.
+- Playwright: all 18 Sprint 1, Sprint 2, and Sprint 3 tests passed across desktop, tablet, and mobile in a serialized 2.9-minute run.
+- `npm audit --omit=dev --audit-level=high`: zero vulnerabilities.
+- Docker is not installed on this workstation, so `docker compose config` and container startup remain environment validation gaps. Native production builds, fresh PostgreSQL, and real MinIO protocol validation passed.
+
+Implemented production contracts:
+
+- `BIGINT` minor-unit wallets, deposits, withdrawals, journal entries, limits, and reconciliations.
+- Atomic deposit pending reserve, settlement, wallet credit, lifetime total, transition history, and journal append.
+- Atomic withdrawal reserve, approval/rejection/processing/completion state machine, reserve return on rejection/failure, and final journal debit.
+- Capability-driven Payment Core with full deposit, callback, signature, status-query, refund, payout, balance, reconciliation, health, country, currency, and idempotency contracts.
+- Country, currency, method, availability, priority, cost, preferred-provider, and preflight-failover routing. The selected adapter remains internal and never changes the player API.
+- Stripe remains a reference adapter for Checkout and Connect flows. No simulated PayFast, Ozow, Peach, Xsolla, Flutterwave, Card, EFT, or crypto adapter is registered in production.
+- Provider/reference/amount/currency matching, duplicate protection, idempotent network retry, and financial notifications are generic Payment Core behavior.
+- Provider-authenticated balance retrieval before deposit settlement, withdrawal processing, and reconciliation.
+- Reserve checks stop settlement when provider funds cannot cover the requested movement and player liabilities; each check receives a SHA-256 identity and an S3-backed immutable audit artifact.
+- Configurable jurisdiction policy for currency, age, methods, source-of-funds requirement, and daily/monthly limits.
+- Player-controlled limit reductions, cooling-off, and self-exclusion; increases require compliance review.
+- S3-compatible evidence, statement, financial export, treasury audit, and provider audit storage with ownership checks and SHA-256 verification; local filesystem remains development-only.
+- AML review inputs record verification, high-value, daily velocity, risk classification, identity evidence, and source-of-funds evidence while the launch policy remains 100% manual approval.
+- A provider-neutral compliance contract defines identity verification callbacks and AML screening integration without exposing review functions to players.
+- Separate role-protected future-CRM APIs with no Admin component, route, or control in the player application.
+
+#### Deployment Tasks (Post-Freeze)
+
+Remaining deployment and external approval work:
+
+| Priority | Evidence gap | Required completion |
+|---|---|---|
+| Deployment | Selected production adapter | After commercial approval, implement or activate the selected provider adapter and complete its sandbox certification. This is the remaining provider deployment task, not Payment Core architecture work. |
+| High | Launch configuration | Supply selected-provider, SMTP, PostgreSQL, Redis, and S3-compatible secrets through the deployment secret manager and verify `/health/ready` in staging. |
+| High | Jurisdiction approval | Obtain legal/compliance approval for the ZA launch rules, identity checks, sanctions/PEP provider, source-of-funds thresholds, retention, responsible-gaming limits, and supported payment methods. This is an external policy approval, not unfinished application code. |
+| Medium | Container validation | Exercise the pinned Compose stack in CI or staging because Docker is unavailable on this workstation. |
+
+Freeze decision: **SPRINT 3 APPROVED.** The provider-independent Financial Platform is complete. Implementing and certifying the commercially selected production adapter remains a deployment task. Sprint 4 has not begun.
+
+Completion-phase file inventory:
+
+- Contract and deployment: `README.md`, `docker-compose.yml`, `frontend/Dockerfile`, `frontend/next.config.mjs`.
+- Configuration: `backend/internal/config/config.go`, `backend/internal/config/config_test.go`.
+- Financial persistence: `backend/internal/db/db.go`, `backend/internal/db/hub_postgres.go`, `backend/internal/db/financial_postgres.go`, `backend/internal/db/financial_completion.go`.
+- Financial models and API: `backend/internal/models/financial.go`, `backend/internal/handlers/financial.go`, `backend/internal/server/server.go`.
+- Provider and compliance boundaries: `backend/internal/payments/provider.go`, `backend/internal/payments/registry.go`, `backend/internal/payments/stripe.go`, `backend/internal/compliance/provider.go`.
+- Object storage: `backend/internal/storage/storage.go`.
+- Migrations: `backend/migrations/004_financial_platform.sql`, `backend/migrations/005_financial_completion.sql`, `backend/migrations/embed.go`.
+- Backend verification: `backend/internal/db/financial_test.go`, `backend/internal/db/financial_postgres_integration_test.go`, `backend/internal/payments/provider_test.go`, `backend/internal/payments/stripe_test.go`, `backend/internal/server/financial_compliance_test.go`, `backend/internal/server/stripe_financial_integration_test.go`, `backend/internal/storage/storage_test.go`, `backend/internal/storage/s3_integration_test.go`.
+- Player frontend: `frontend/app/lib/api.ts`, `frontend/app/wallet/page.tsx`, `frontend/styles/globals.css`.
+- Frontend verification: `frontend/app/wallet/page.test.tsx`, `frontend/e2e/financial-platform.spec.ts`, `docs/proof/sprint-3-financial-platform/`.
+
+#### Provider Integration Guide
+
+This guide is the permanent onboarding contract for Xsolla, Peach Payments, Ozow, PayFast, Flutterwave, or any future provider. Adding an adapter must not change Wallet, Treasury, Ledger, statements, notifications, policy rules, payment states, or player APIs.
+
+##### Adapter Boundary
+
+A new adapter belongs in `backend/internal/payments`. It implements `payments.Provider` and owns all provider-specific:
+
+- Credentials and configuration validation.
+- HTTP clients, URLs, headers, request models, and response models.
+- Callback signature verification and event-envelope parsing.
+- Payment, refund, payout, balance, reconciliation, and health API calls.
+- Provider reference values and payout-destination validation.
+- Translation from provider statuses into Payment Core statuses.
+
+Provider SDK types must not appear outside the adapter. The adapter must not import Wallet, Treasury, Ledger, notification, policy, or HTTP handler packages.
+
+##### Required Interface
+
+Every production adapter implements:
+
+1. `Descriptor`
+2. `ValidateConfiguration`
+3. `CreateDepositSession`
+4. `VerifySignature`
+5. `ParseCallback`
+6. `QueryPaymentStatus`
+7. `Refund`
+8. `ValidatePayoutDestination`
+9. `CreatePayout`
+10. `QueryPayoutStatus`
+11. `Balance`
+12. `Reconcile`
+13. `Health`
+
+The descriptor declares capabilities, methods, countries, currencies, priority, and cost. Production routing excludes adapters that do not declare the complete capability set required for the requested operation.
+
+##### Registration And Configuration
+
+1. Add the adapter constructor in `backend/internal/payments`.
+2. Register the configured adapter in `RegistryFromSettings`.
+3. Keep credentials in adapter-specific environment variables supplied by the deployment secret manager.
+4. Add the provider ID to `SKILL_ARENA_PAYMENT_ACTIVE_PROVIDERS`.
+5. Configure the default with `SKILL_ARENA_PAYMENT_DEFAULT_PROVIDER`.
+6. Configure countries, currencies, methods, priority, and cost through `SKILL_ARENA_PAYMENT_ROUTES`.
+7. Verify `ValidateConfiguration("production")` fails closed for missing, sandbox, malformed, or unsafe production configuration.
+
+Multiple adapters may be active simultaneously. Registration may add an adapter, but must not alter Payment Core selection, Wallet handlers, Treasury handlers, financial states, or frontend code.
+
+##### Routing
+
+Payment Core filters adapters by:
+
+- Operation capability.
+- Country.
+- Currency.
+- Payment method.
+- Configuration status.
+- Health.
+
+Eligible adapters are ordered by:
+
+- Explicit business preference.
+- Routing priority.
+- Estimated variable and fixed cost.
+- Stable provider ID ordering.
+
+Failover occurs only during health preflight, before an external financial operation is attempted. After the first attempt, the operation remains pinned to that adapter and idempotency key. Payment Core must never switch providers after an ambiguous response.
+
+##### Callback Contract
+
+Callbacks use `/api/v1/payments/webhooks/{providerId}`.
+
+The adapter must:
+
+- Verify the signature against the exact raw request body before parsing.
+- Enforce timestamp or replay-window validation when the provider supports it.
+- Return a stable provider event ID.
+- Return a signature fingerprint without exposing the signature.
+- Normalize the resource as deposit, payout, or ignored.
+- Normalize status to pending, succeeded, failed, expired, or unknown.
+- Return provider reference, internal resource ID, amount in minor units, and ISO currency.
+
+Payment Core and the financial store enforce event idempotency, resource ownership, provider/reference matching, amount/currency matching, legal transitions, reserve checks, settlement, audit, and notification behavior.
+
+##### Idempotency
+
+Every deposit, refund, and payout requires an idempotency key. The adapter must transmit it using the provider's supported mechanism.
+
+- Same key and same request represents the same operation.
+- Same key with different request data must fail.
+- Network retries reuse the same provider and key.
+- A timeout or unknown response must not trigger cross-provider failover.
+- Duplicate callbacks must return success without applying settlement twice.
+
+##### Required Tests
+
+Each adapter must include:
+
+- Interface and descriptor contract tests.
+- Configuration validation tests for development, sandbox, and production.
+- Deposit session request and response tests.
+- Valid, invalid, malformed, and expired signature tests.
+- Pending, successful, failed, expired, and ignored callback tests.
+- Duplicate callback and callback mismatch tests.
+- Payment status and payout status tests.
+- Refund tests.
+- Payout-destination and payout tests.
+- Balance and reconciliation tests.
+- Idempotent retry tests.
+- Provider timeout, HTTP error, malformed response, and outage tests.
+- Routing eligibility and health-failover tests.
+- An end-to-end sandbox deposit and withdrawal lifecycle test.
+
+##### Production Certification
+
+An adapter may be enabled in production only after:
+
+- Commercial and jurisdiction approval.
+- Production credentials are stored in the secret manager.
+- Allowed countries, currencies, methods, costs, and limits are approved.
+- Sandbox deposit, callback, settlement, refund, payout, and reconciliation pass.
+- Duplicate, delayed, reordered, invalid, and replayed callbacks fail safely.
+- Timeout and outage behavior is verified without duplicate money movement.
+- Treasury confirms provider balances and reserves.
+- Finance confirms cent-level ledger reconciliation.
+- Compliance approves KYC, AML, evidence, retention, and dispute requirements.
+- Security reviews credentials, signatures, TLS, callback exposure, logs, and redaction.
+- Staging readiness and health checks pass.
+- The adapter is enabled through configuration without frontend or Payment Core changes.
+
 ### Sprint 4: Admin CRM
 
-Visible outcome: authorized staff use a separate application, authentication surface, navigation model, permission system, and deployment boundary to manage users, withdrawals, deposits requiring review, KYC, financial assessments, support, tournaments, moderation, treasury, reconciliation, fraud signals, announcements, compliance, and audit records.
+Status: **NOT STARTED**.
+
+Objective: build the operational and compliance control center as a standalone application. The player platform must contain no administrative functionality.
+
+Visible outcome: authorized staff use a separate application, authentication surface, navigation model, permission system, API boundary, and deployment boundary to manage users, financial operations, KYC/AML, support, compliance, monitoring, notifications, and immutable audit records.
 
 Required foundation work:
 
 - Create a separate CRM application. Do not add CRM pages or navigation to the player Next.js application.
-- Replace broad role ranking with explicit permissions and separation of duties.
-- Complete treasury, fraud, compliance, support, and super-admin workflows.
-- Implement tamper-evident audit records and evidence retention.
-- Add safe administrative session controls and mandatory MFA reauthentication for sensitive actions.
-- Complete production observability, alerts, worker/queue monitoring, and operational runbooks.
+- Give the CRM independent authentication, authorization, navigation, API gateway, and deployment configuration.
+- Replace broad role ranking with explicit permissions and separation of duties for Super Administrator, Compliance, Finance, Support, Operations, and Read Only roles.
+- Enforce MFA, session timeout, device/IP logging, revocation, rate limiting, CSRF protection, and audit attribution for every administrator.
+- Build an operational dashboard from real APIs for players, finance, games, support, compliance, and system health.
+- Build searchable user management for profile, verification, risk, limits, devices, sessions, match history, and financial history.
+- Permit lock, unlock, forced logout, MFA reset, suspension, and internal notes. Never permit direct wallet editing.
+- Build financial operations for deposits, withdrawals, statements, Treasury, provider balances, reserve checks, and reconciliation through the frozen Payment Core.
+- Implement the manual withdrawal review workflow with mandatory internal reasons and generic player notifications.
+- Build KYC/AML review queues for evidence, provider responses, risk indicators, approval, rejection, information requests, and escalation.
+- Build compliance controls for jurisdictions, assessments, limits, cooling-off, self-exclusion, and restrictions without code changes.
+- Build Support CRM for assignment, replies, escalation, closure, attachments, priority, and internal-only notes.
+- Build an immutable Audit Center recording administrator, timestamp, IP, device, previous value, new value, reason, and affected resource.
+- Build administrative announcements and security, maintenance, and compliance notices through the existing notification service.
+- Build read-only monitoring for API, PostgreSQL, Redis, object storage, providers, queues, workers, email, and alerts. Do not add restart controls.
+- Keep every administrative API authenticated, permission-checked, validated, rate-limited, audited, and inaccessible through player endpoints.
+- Make the CRM responsive, accessible, enterprise-focused, dark-mode capable, and entirely API-driven with no placeholder data.
+
+Sprint 4 validation must include Go tests, vet, build, TypeScript, ESLint, Vitest, Next.js production build, Playwright on desktop/tablet/mobile, permission and audit tests, and complete Sprint 1-3 regression verification.
+
+Sprint 4 may be approved only when the separate CRM, all listed operational modules, security review, automated validation, and regression suites are complete. Its future freeze tag is `sprint-4-v1.0-freeze`.
 
 ### Sprint 5: Session Gateway, Presence, Notifications, And Realtime Events
 
@@ -3201,7 +3427,7 @@ Wallet should feel like a banking-grade trust surface, not a balance widget.
 | Deposit, withdraw, verify, review pending item, or export   |
 +------------------------------------------------------------+
 | Money Movement Timeline                                     |
-| Deposit: provider session -> pending -> verified -> settled |
+| Deposit: requested -> pending provider -> pending verification -> completed |
 | Withdraw: request -> AML/risk -> treasury -> provider ->    |
 | settlement -> ledger complete                               |
 +------------------------------------------------------------+
@@ -4343,7 +4569,7 @@ Final regression audit:
 - Fresh PostgreSQL 17 migration and restart persistence passed again.
 - The E2E test server uses elevated test-only login/register limits because all 15 tests share one loopback IP; production rate limits and their backend tests are unchanged.
 
-Freeze decision: **SPRINT 2 APPROVED AND FROZEN.** Sprint 3 remains unimplemented until its planning and approval workflow begins.
+Freeze decision: **SPRINT 2 APPROVED AND FROZEN.** Sprint 3 subsequently completed and is frozen at `sprint-3-v1.0-freeze`. Sprint 4 has not begun.
 
 ### Arena Hub Owns
 
@@ -4788,20 +5014,33 @@ Production rate limiting uses Redis; local development falls back to memory.
 Payment providers implement one interface:
 
 - Create deposit session
-- Request withdrawal
-- Parse webhook
-- Validate credentials
+- Verify callback signature
+- Parse callback into provider-neutral events
+- Query payment status
+- Refund
+- Create payout
+- Query payout status
+- Read provider balance
+- Reconcile
 - Health check
+- Enforce idempotency
+- Declare supported currencies and countries
 
 Configured provider families:
 
 - PayFast
 - Ozow
-- Card provider
-- Bank EFT
+- Card
+- Bank EFT / bank transfer
+- Peach Payments
+- Flutterwave
+- PayPal
+- Xsolla
 - Future crypto provider
 
-Provider-specific logic must not leak into wallet handlers.
+`Payment Core` owns the provider registry and selects among active adapters by country, currency, method, availability, priority, cost, business preference, and preflight failover. Multiple adapters may be active simultaneously. The player API accepts `card`, `eft`, or `bank_transfer`; it never accepts or returns a provider name. Provider-specific logic, callback headers, objects, and terminology stay inside adapters.
+
+Adapters are disabled until explicitly active and fully configured. Production startup requires at least one active adapter and an active default. No simulated provider is enabled in production; deterministic contract adapters exist only in tests.
 
 ### Deposit
 
@@ -4809,23 +5048,23 @@ Request requirements:
 
 - Authenticated user
 - Verified email
-- Positive amount
+- Positive integer `amountMinor`
 - `Idempotency-Key`
-- Provider/method/currency metadata
+- Method and ISO-4217 currency
+- Completed financial assessment
+- Active responsible-gaming status
+- Jurisdiction policy and limit eligibility
 
 Lifecycle:
 
-1. Deposit request
-2. Provider session
-3. Pending
-4. Provider webhook/callback
-5. Verification
-6. Settlement
-7. Ledger entry
-8. Available live balance
-9. Audit log
+1. `requested`
+2. `pending_provider`
+3. `pending_verification`
+4. `completed`, or `failed`, or `expired`
 
-Invariant: wallet balance is not credited at deposit request time.
+The signed, replay-protected provider callback validates provider, reference, amount, and currency before settlement. The same provider event is accepted once. Wallet available balance is credited in the same serializable transaction that releases pending funds, records the transition, and appends the hash-chained journal entry.
+
+Provider callbacks persist every lifecycle transition. A successful signed callback moves the deposit to `pending_verification`; reserve validation and the atomic ledger settlement then move it to `completed`. Duplicate callbacks are ignored. A callback whose processing failed may be retried safely with the same provider event ID.
 
 ### Withdrawal
 
@@ -4834,24 +5073,22 @@ Request requirements:
 - Authenticated user
 - Verified email
 - KYC when required
-- Positive amount
+- Positive integer `amountMinor`
 - Available live balance
 - Trust-tier limit
 - `Idempotency-Key`
 
 Lifecycle:
 
-1. Withdrawal request
-2. Pending withdrawal hold
-3. AML/risk checks
-4. Treasury approval or rejection
-5. Provider payout
-6. Settlement
-7. Ledger withdrawal and fee entries
-8. Wallet pending hold released
-9. Audit log
+Player-visible lifecycle:
 
-Invariant: withdrawal is not final-debited at request time.
+1. `requested`
+2. `pending_review`
+3. `approved`
+4. `processing`
+5. `completed`, `rejected`, or `failed`
+
+Initial policy is always manual review. A request atomically moves available funds into a pending withdrawal reserve. Rejection or provider failure returns that reserve exactly once. Completion releases the reserve and appends the immutable debit journal entry. Players never receive approval controls or internal risk details.
 
 ### Idempotency
 
@@ -4861,29 +5098,30 @@ Behavior:
 
 - Same key and same request hash returns the existing operation.
 - Same key and different request hash is rejected.
-- Keys are recorded in the operation metadata and in production idempotency storage.
+- Keys are stored against normalized deposit or withdrawal records with a request hash and a unique `(user_id, idempotency_key)` constraint.
 
 ### Treasury Reconciliation
 
-Treasury health compares:
+Normalized Treasury reconciliation compares:
 
-- Player reserve
-- Player liabilities
-- House exposure
-- Reserve totals
+- Provider-reported minor-unit balance
+- Hash-chained financial journal balance
+- Exact minor-unit variance
+- Immutable reconciliation hash
 
-Financial flow tests verify that wallet balances reconcile with balance-changing ledger entries and that treasury remains solvent.
+Reconciliation, assessment decisions, and withdrawal transitions are role-protected APIs intended for the separate Admin CRM. No CRM screen or approval action exists in the player application.
 
-### AML
+### Jurisdiction And Responsible Gaming
 
-Risk inputs:
+`SKILL_ARENA_FINANCIAL_POLICIES` may provide a JSON country-policy map. Each country defines:
 
-- Large withdrawal
-- Velocity
-- Country rules
-- Trust tier
+- Currency and minimum age
+- Enabled payment methods
+- Whether source of funds is required
+- Daily and monthly deposit limits in minor units
+- Daily and monthly withdrawal limits in minor units
 
-High-risk cases create AML review records and may escalate to fraud analyst workflow.
+South Africa (`ZA`, `ZAR`) is the default policy. Player limit reductions, cooling-off, and self-exclusion take effect immediately. Limit increases require a future CRM compliance decision.
 
 ---
 
@@ -4895,7 +5133,7 @@ Base path: `/api/v1`
 
 Browser authentication uses `HttpOnly`, `SameSite=Strict` access and refresh cookies. Service/native clients may send `Authorization: Bearer <token>`. Browser JavaScript must not persist either token.
 
-Financial POST requests require `Idempotency-Key`.
+Deposit and withdrawal POST requests require a unique 16-128 character `Idempotency-Key`.
 
 ### Public
 
@@ -5126,51 +5364,86 @@ Supported ticket categories are `account`, `security`, `gameplay`, `wallet`, and
 | GET | `/api/v1/seasons/current` | Active season |
 | GET | `/api/v1/seasons/leaderboard` | Season ranking |
 
-### Wallet
+### Financial Platform
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/v1/wallet` | Wallet summary |
-| GET | `/api/v1/wallet/transactions` | Ledger history |
-| GET | `/api/v1/wallet/balance` | Live/demo balances |
-| GET | `/api/v1/wallet/available` | Available balances |
-| POST | `/api/v1/wallet/deposit` | Create provider deposit session |
-| POST | `/api/v1/wallet/withdraw` | Request withdrawal |
-| POST | `/api/v1/wallet/lock-tokens` | Lock wallet funds |
-| POST | `/api/v1/wallet/unlock-tokens` | Unlock wallet funds |
+| GET | `/api/v1/financial/overview` | Wallet, eligibility, methods, limits, and active lifecycles |
+| GET | `/api/v1/financial/transactions` | Immutable financial journal |
+| POST | `/api/v1/financial/transactions/export` | Store a complete CSV journal export in object storage |
+| GET | `/api/v1/financial/statements?from=&to=` | Generate a journal-backed statement |
+| POST | `/api/v1/financial/statements/export` | Store the latest monthly CSV statement in object storage |
+| GET | `/api/v1/financial/artifacts/{artifactId}` | Download an owned artifact with SHA-256 integrity header |
+| GET, POST | `/api/v1/financial/evidence` | List or upload owned KYC/AML evidence |
+| GET, PUT | `/api/v1/financial/assessment` | Read or submit player financial assessment |
+| GET, PUT | `/api/v1/financial/limits` | Read or lower limits; set cooling-off/self-exclusion |
+| GET, POST | `/api/v1/financial/deposits` | List deposits or create a provider session |
+| GET, POST | `/api/v1/financial/withdrawals` | List or request withdrawals |
 
 Deposit request:
 
 ```json
 {
-  "amount": 100,
-  "currency": "USD",
-  "provider": "payfast",
-  "method": "card",
-  "country": "ZA",
-  "reference": "client-reference"
+  "amountMinor": 10000,
+  "currency": "ZAR",
+  "method": "card"
 }
 ```
 
-Withdrawal request uses the same body shape and requires email verification and KYC when thresholds require it.
+Withdrawal uses the same body shape. The backend selects the provider. Success returns `202`; an identical idempotent replay returns `200` with `Idempotent-Replayed: true`; reuse with a different request returns `409`.
+
+Assessment request:
+
+```json
+{
+  "country": "ZA",
+  "occupation": "employed",
+  "sourceOfFunds": "salary"
+}
+```
+
+Limit request values are integer minor units. Reductions are immediate; increases return `409 LIMIT_INCREASE_REQUIRES_REVIEW`.
+
+Legacy `/api/v1/wallet` read endpoints remain temporarily available for frozen Hub compatibility. Legacy client-controlled deposit, withdrawal, lock, and unlock routes are no longer registered.
+
+### Payment Callback
+
+| Method | Path | Authentication | Purpose |
+|---|---|---|---|
+| POST | `/api/v1/payments/webhooks/{providerId}` | Adapter signature | Verify and process a provider-neutral payment event |
+
+Each adapter owns its callback headers, signature scheme, envelope parsing, and status normalization. The Stripe reference adapter currently handles:
+
+- `checkout.session.completed`
+- `checkout.session.async_payment_succeeded`
+- `checkout.session.async_payment_failed`
+- `checkout.session.expired`
+- `transfer.created`
+- `transfer.reversed`
+- `transfer.failed`
+- `payout.created`
+- `payout.paid`
+- `payout.failed`
+- `payout.canceled`
+
+Payment Core passes the unmodified raw body and all headers to the selected adapter. Unknown providers return `404`, invalid or expired signatures return `401`, resource/amount/currency mismatches return `409`, and duplicate provider event IDs return `200 duplicate_ignored`.
 
 ### Treasury
 
 | Method | Path | Role | Purpose |
 |---|---|---|---|
-| GET | `/api/v1/treasury/status` | player | Public treasury status |
-| GET | `/api/v1/admin/treasury/health` | admin | Treasury health |
-| POST | `/api/v1/admin/treasury/withdrawals/approve` | treasury_manager | Approve withdrawal |
-| POST | `/api/v1/admin/treasury/withdrawals/reject` | treasury_manager | Reject withdrawal |
-| POST | `/api/v1/admin/treasury/withdrawals/settle` | treasury_manager | Settle withdrawal |
+| POST | `/api/v1/admin/financial/assessments/decision` | admin | Record assessment review decision |
+| POST | `/api/v1/admin/financial/payout-destinations` | admin | Link and verify an adapter-owned payout destination |
+| POST | `/api/v1/admin/financial/withdrawals/transition` | treasury_manager | Approve, reject, or start provider processing |
+| POST | `/api/v1/admin/financial/reconcile` | treasury_manager | Retrieve provider balance and record immutable reconciliation |
 
-Treasury action body:
+Withdrawal transition:
 
 ```json
 {
-  "withdrawalId": "obj_x",
-  "providerRef": "provider-reference",
-  "reason": "optional rejection reason"
+  "withdrawalId": "withdrawal-id",
+  "status": "approved",
+  "reason": "Manual review complete"
 }
 ```
 
@@ -5300,7 +5573,7 @@ Production database: PostgreSQL.
 
 Development fallback: JSON files under `backend/data/`, ignored from Git.
 
-Migration sources: `backend/migrations/001_create_tables.sql`, `002_auth_normalized.sql`, and `003_arena_hub.sql`.
+Migration sources: `backend/migrations/001_create_tables.sql`, `002_auth_identity.sql`, `003_arena_hub.sql`, and `004_financial_platform.sql`. Applied checksums are recorded in `schema_migrations`.
 
 ### Core Tables
 
@@ -5336,21 +5609,28 @@ Migration sources: `backend/migrations/001_create_tables.sql`, `002_auth_normali
 | `player_notifications` | Durable owned notification state |
 | `notification_events` | Append-only notification delivery/event stream |
 | `support_tickets` | Durable player support requests |
+| `financial_wallets` | Integer minor-unit player balances and pending reserves |
+| `financial_assessments` | Jurisdiction, source-of-funds, risk, and responsible-gaming status |
+| `financial_limits` | Minor-unit limits, cooling-off, and self-exclusion |
+| `financial_deposits` | Provider-neutral deposit state machine |
+| `financial_withdrawals` | Policy-controlled withdrawal state machine |
+| `financial_journal` | Append-only hash-chained settled money journal |
+| `financial_transitions` | Auditable deposit and withdrawal state transitions |
+| `payment_webhook_events` | Signed callback replay protection and outcome |
+| `treasury_accounts` | Currency-specific treasury account balances |
+| `treasury_reconciliations` | Immutable provider-to-journal reconciliation evidence |
+| `financial_evidence` | KYC/AML evidence metadata and object-storage integrity |
+| `financial_artifacts` | Statements, exports, and audit artifact metadata |
+| `financial_payout_destinations` | Verified provider destinations used after manual approval |
+| `treasury_reserve_checks` | Immutable provider balance, liability, and settlement decisions |
 
 ### Money Tables
 
-`wallets` stores current balance state.
+`financial_wallets` is authoritative for the Financial Platform. Every amount is a signed 64-bit integer in ISO currency minor units. Constraints prevent negative available, pending, locked, and lifetime balances.
 
-`ledger_entries` records balance-changing and lock/unlock operations:
+`financial_journal` records only settled balance-changing operations. Every entry includes sequence, previous hash, entry hash, reference, and post-entry balance. Deposit settlement and withdrawal completion append journal entries inside the same serializable transaction as the wallet update.
 
-- `deposit`
-- `withdraw`
-- `fee`
-- `lock`
-- `unlock`
-- `stake`
-- `reward`
-- `loss`
+`wallets`, `ledger_entries`, and `financial_idempotency` are legacy compatibility tables for backend domains not yet migrated to the Sprint 3 Financial Platform. Their mutating player routes are not registered.
 
 `financial_idempotency` prevents duplicate deposit/withdrawal creation:
 
@@ -5393,10 +5673,19 @@ Important indexes:
 - `idx_notifications_user_status_created`
 - `idx_notification_events_user_sequence`
 - `idx_support_tickets_user_updated`
+- `idx_financial_deposits_user_created`
+- `idx_financial_withdrawals_review`
+- `idx_financial_journal_user_sequence`
+- `idx_financial_journal_reference`
+- `idx_financial_transitions_resource`
+- `idx_payment_webhooks_resource`
+- `idx_financial_evidence_user_created`
+- `idx_financial_artifacts_user_created`
+- `idx_treasury_reserve_provider_created`
 
 ### Repository Note
 
-At freeze, PostgreSQL is authoritative. Authentication and Arena Hub domains use normalized repositories. Older domains continue through `store_snapshots` plus dedicated financial idempotency tables. This is intentionally transitional. The domain store API isolates callers so each remaining subsystem can later be normalized without changing handlers or business workflows.
+PostgreSQL is authoritative in production. Authentication, Arena Hub, and Financial Platform domains use normalized repositories. Financial operations never use `store_snapshots`; the development runtime uses isolated in-memory financial repositories. Older game and competition domains remain transitional until their own production slices migrate.
 
 ---
 
@@ -5454,8 +5743,8 @@ Required production environment:
 Provider credentials:
 
 - Email: `SKILL_ARENA_SMTP_HOST`, `SKILL_ARENA_SMTP_USER`, `SKILL_ARENA_SMTP_PASS`
-- PayFast: `SKILL_ARENA_PAYFAST_MERCHANT_ID`, `SKILL_ARENA_PAYFAST_PASSPHRASE`
-- Ozow: `SKILL_ARENA_OZOW_SITE_CODE`, `SKILL_ARENA_OZOW_PRIVATE_KEY`
+- Payment routing: `SKILL_ARENA_PAYMENT_ACTIVE_PROVIDERS`, `SKILL_ARENA_PAYMENT_DEFAULT_PROVIDER`, `SKILL_ARENA_PAYMENT_ROUTES`
+- Stripe reference adapter: `SKILL_ARENA_STRIPE_SECRET_KEY`, `SKILL_ARENA_STRIPE_WEBHOOK_SECRET`, `SKILL_ARENA_STRIPE_MODE`, `SKILL_ARENA_STRIPE_API_BASE`
 - Storage: `SKILL_ARENA_STORAGE_PROVIDER=s3`, `SKILL_ARENA_S3_ENDPOINT`, `SKILL_ARENA_S3_BUCKET`, `SKILL_ARENA_S3_ACCESS_KEY`, `SKILL_ARENA_S3_SECRET_KEY`
 
 ### Authentication
@@ -5526,7 +5815,7 @@ Deposit flow:
 1. Client submits deposit request with `Idempotency-Key`.
 2. Backend creates provider session.
 3. Session enters provider/pending lifecycle.
-4. Provider callback marks pending/verified/settled.
+4. Verified provider callback moves the deposit to pending verification.
 5. Settlement creates ledger entry.
 6. Wallet available balance changes only after settlement.
 7. Audit log records state transitions.

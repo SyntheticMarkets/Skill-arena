@@ -20,15 +20,17 @@ type Server struct {
 func New(store *db.Store, cfg *config.Config) *Server {
 	store.ConfigureRuntime(cfg.Settings)
 	router := http.NewServeMux()
-	router.Handle("/health", healthHandler(store, cfg))
+	financial := handlers.NewFinancialHandlers(store, cfg.Settings)
+	router.Handle("/health", healthHandler(store, cfg, financial))
 	router.HandleFunc("/health/live", liveHandler)
-	router.Handle("/health/ready", healthHandler(store, cfg))
+	router.Handle("/health/ready", healthHandler(store, cfg, financial))
 	router.Handle("/api/v1/config/features", handlers.FeatureFlagsHandler(cfg.Settings))
 	router.Handle("/api/v1/platform/stats", handlers.PlatformStatsHandler(store))
 	router.Handle("/api/v1/platform/puzzle-preview", handlers.PlatformPuzzlePreviewHandler())
 	router.Handle("/api/v1/catalog/games", handlers.GameCatalogHandler(store))
 	router.Handle("/api/v1/catalog/games/", handlers.GameRulesHandler(store))
 	router.Handle("/api/v1/support/content", handlers.SupportContentHandler(cfg.Settings.Platform.SupportEmail))
+	router.HandleFunc("/api/v1/payments/webhooks/", financial.Webhook)
 	router.Handle("/api/v1/auth/register", handlers.RegisterHandler(store, cfg))
 	router.Handle("/api/v1/auth/login", handlers.LoginHandler(store, cfg))
 	router.Handle("/api/v1/auth/mfa/challenge", handlers.MFAChallengeHandler(store, cfg))
@@ -73,10 +75,17 @@ func New(store *db.Store, cfg *config.Config) *Server {
 	router.Handle("/api/v1/wallet/transactions", handlers.AuthMiddleware(store, cfg, handlers.WalletTransactionsHandler(store)))
 	router.Handle("/api/v1/wallet/balance", handlers.AuthMiddleware(store, cfg, handlers.WalletBalanceHandler(store)))
 	router.Handle("/api/v1/wallet/available", handlers.AuthMiddleware(store, cfg, handlers.WalletAvailableHandler(store)))
-	router.Handle("/api/v1/wallet/deposit", handlers.AuthMiddleware(store, cfg, handlers.WalletDepositHandler(store)))
-	router.Handle("/api/v1/wallet/withdraw", handlers.AuthMiddleware(store, cfg, handlers.WalletWithdrawHandler(store)))
-	router.Handle("/api/v1/wallet/lock-tokens", handlers.AuthMiddleware(store, cfg, handlers.WalletLockHandler(store)))
-	router.Handle("/api/v1/wallet/unlock-tokens", handlers.AuthMiddleware(store, cfg, handlers.WalletUnlockHandler(store)))
+	router.Handle("/api/v1/financial/overview", handlers.AuthMiddleware(store, cfg, http.HandlerFunc(financial.Overview)))
+	router.Handle("/api/v1/financial/transactions", handlers.AuthMiddleware(store, cfg, http.HandlerFunc(financial.Transactions)))
+	router.Handle("/api/v1/financial/transactions/export", handlers.AuthMiddleware(store, cfg, http.HandlerFunc(financial.TransactionExport)))
+	router.Handle("/api/v1/financial/statements", handlers.AuthMiddleware(store, cfg, http.HandlerFunc(financial.Statement)))
+	router.Handle("/api/v1/financial/statements/export", handlers.AuthMiddleware(store, cfg, http.HandlerFunc(financial.StatementExport)))
+	router.Handle("/api/v1/financial/artifacts/", handlers.AuthMiddleware(store, cfg, http.HandlerFunc(financial.Artifact)))
+	router.Handle("/api/v1/financial/evidence", handlers.AuthMiddleware(store, cfg, http.HandlerFunc(financial.Evidence)))
+	router.Handle("/api/v1/financial/assessment", handlers.AuthMiddleware(store, cfg, http.HandlerFunc(financial.Assessment)))
+	router.Handle("/api/v1/financial/limits", handlers.AuthMiddleware(store, cfg, http.HandlerFunc(financial.Limits)))
+	router.Handle("/api/v1/financial/deposits", handlers.AuthMiddleware(store, cfg, http.HandlerFunc(financial.Deposit)))
+	router.Handle("/api/v1/financial/withdrawals", handlers.AuthMiddleware(store, cfg, http.HandlerFunc(financial.Withdrawal)))
 	router.Handle("/api/v1/treasury/status", handlers.AuthMiddleware(store, cfg, handlers.PublicTreasuryStatusHandler(store)))
 	router.Handle("/api/v1/devices/fingerprint", handlers.AuthMiddleware(store, cfg, handlers.RegisterDeviceHandler(store)))
 	router.Handle("/api/v1/calibration/start", handlers.AuthMiddleware(store, cfg, handlers.StartCalibrationHandler(store)))
@@ -111,6 +120,10 @@ func New(store *db.Store, cfg *config.Config) *Server {
 	router.Handle("/api/v1/admin/treasury/withdrawals/approve", handlers.AuthMiddleware(store, cfg, handlers.RequireRole("treasury_manager", handlers.TreasuryApproveWithdrawalHandler(store))))
 	router.Handle("/api/v1/admin/treasury/withdrawals/reject", handlers.AuthMiddleware(store, cfg, handlers.RequireRole("treasury_manager", handlers.TreasuryRejectWithdrawalHandler(store))))
 	router.Handle("/api/v1/admin/treasury/withdrawals/settle", handlers.AuthMiddleware(store, cfg, handlers.RequireRole("treasury_manager", handlers.TreasurySettleWithdrawalHandler(store))))
+	router.Handle("/api/v1/admin/financial/assessments/decision", handlers.AuthMiddleware(store, cfg, handlers.RequireRole("admin", http.HandlerFunc(financial.AdminAssessmentDecision))))
+	router.Handle("/api/v1/admin/financial/withdrawals/transition", handlers.AuthMiddleware(store, cfg, handlers.RequireRole("treasury_manager", http.HandlerFunc(financial.AdminWithdrawalTransition))))
+	router.Handle("/api/v1/admin/financial/payout-destinations", handlers.AuthMiddleware(store, cfg, handlers.RequireRole("admin", http.HandlerFunc(financial.AdminPayoutDestination))))
+	router.Handle("/api/v1/admin/financial/reconcile", handlers.AuthMiddleware(store, cfg, handlers.RequireRole("treasury_manager", http.HandlerFunc(financial.AdminReconcile))))
 	router.Handle("/api/v1/admin/house-risk/", handlers.AuthMiddleware(store, cfg, handlers.RequireRole("admin", handlers.HouseRiskHandler(store))))
 	router.Handle("/api/v1/admin/baselines", handlers.AuthMiddleware(store, cfg, handlers.RequireRole("admin", handlers.AdminBaselinesHandler(store))))
 	router.Handle("/api/v1/admin/tournaments/bracket", handlers.AuthMiddleware(store, cfg, handlers.RequireRole("admin", handlers.AdminGenerateTournamentBracketHandler(store))))
@@ -134,7 +147,7 @@ func liveHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "alive"})
 }
 
-func healthHandler(store *db.Store, cfg *config.Config) http.Handler {
+func healthHandler(store *db.Store, cfg *config.Config, financial *handlers.FinancialHandlers) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
@@ -152,6 +165,18 @@ func healthHandler(store *db.Store, cfg *config.Config) http.Handler {
 			ready = false
 		} else {
 			checks["email"] = "ready"
+		}
+		if err := store.ObjectStorageHealth(ctx); err != nil {
+			checks["object_storage"] = err.Error()
+			ready = false
+		} else {
+			checks["object_storage"] = "ready"
+		}
+		if err := financial.ProviderHealth(ctx); err != nil {
+			checks["payment_provider"] = err.Error()
+			ready = false
+		} else {
+			checks["payment_provider"] = "ready"
 		}
 		status := http.StatusOK
 		state := "ready"
@@ -177,7 +202,7 @@ func corsMiddleware(cfg *config.Config, next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Vary", "Origin")
 		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-Device-Fingerprint, X-Device-Name, X-Device-OS, X-Device-Browser")
 
 		if r.Method == http.MethodOptions {
@@ -229,7 +254,11 @@ func csrfMiddleware(cfg *config.Config, next http.Handler) http.Handler {
 func requestSizeMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+			limit := int64(1 << 20)
+			if r.URL.Path == "/api/v1/financial/evidence" {
+				limit = 11 << 20
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
 		}
 		next.ServeHTTP(w, r)
 	})

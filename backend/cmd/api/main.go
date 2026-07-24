@@ -11,6 +11,7 @@ import (
 
 	"skill-arena/internal/config"
 	"skill-arena/internal/db"
+	"skill-arena/internal/payments"
 	"skill-arena/internal/server"
 	"skill-arena/internal/workers"
 )
@@ -24,6 +25,9 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 	log.Printf("payment provider status: %+v", cfg.Settings.Payments.ProviderStatus())
+	if err := payments.CoreFromSettings(cfg.Settings.Payments).ValidateConfiguration(cfg.Environment); err != nil {
+		log.Fatalf("invalid payment provider configuration: %v", err)
+	}
 
 	store, err := db.NewWithOptions(ctx, db.Options{
 		DatabaseURL: cfg.DatabaseURL,

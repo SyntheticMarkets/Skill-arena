@@ -57,7 +57,8 @@ function recoverSession() {
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
   const headers = new Headers(init.headers)
-  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  const isFormData = typeof FormData !== 'undefined' && init.body instanceof FormData
+  if (init.body && !isFormData && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   for (const [name, value] of Object.entries(deviceHeaders())) headers.set(name, value)
   const response = await fetch(`${apiBase}${path}`, {
     ...init,

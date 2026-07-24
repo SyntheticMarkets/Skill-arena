@@ -35,7 +35,10 @@ func (s LocalStore) Put(ctx context.Context, key string, data []byte, contentTyp
 	if s.Root == "" {
 		return errors.New("local storage root is required")
 	}
-	path := filepath.Join(s.Root, filepath.Clean(key))
+	path, err := s.path(key)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -46,14 +49,41 @@ func (s LocalStore) Get(ctx context.Context, key string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return os.ReadFile(filepath.Join(s.Root, filepath.Clean(key)))
+	path, err := s.path(key)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
 }
 
 func (s LocalStore) Delete(ctx context.Context, key string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return os.Remove(filepath.Join(s.Root, filepath.Clean(key)))
+	path, err := s.path(key)
+	if err != nil {
+		return err
+	}
+	return os.Remove(path)
+}
+
+func (s LocalStore) path(key string) (string, error) {
+	if s.Root == "" {
+		return "", errors.New("local storage root is required")
+	}
+	root, err := filepath.Abs(s.Root)
+	if err != nil {
+		return "", err
+	}
+	clean := filepath.Clean(filepath.FromSlash(strings.TrimLeft(key, "/")))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.IsAbs(clean) {
+		return "", errors.New("invalid object key")
+	}
+	target := filepath.Join(root, clean)
+	if target != root && !strings.HasPrefix(target, root+string(filepath.Separator)) {
+		return "", errors.New("object key escapes storage root")
+	}
+	return target, nil
 }
 
 func (s LocalStore) Health(ctx context.Context) error {
@@ -78,8 +108,31 @@ func (s S3CompatibleStore) Health(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := s.validate(); err != nil {
+		return err
+	}
+	req, err := s.request(ctx, http.MethodHead, "", nil, "")
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("s3 health request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("s3 bucket health failed: %s", resp.Status)
+	}
+	return nil
+}
+
+func (s S3CompatibleStore) validate() error {
 	if s.Endpoint == "" || s.Bucket == "" || s.AccessKey == "" || s.SecretKey == "" {
 		return errors.New("s3-compatible storage credentials are incomplete")
+	}
+	endpoint, err := url.Parse(s.Endpoint)
+	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" {
+		return errors.New("s3-compatible storage endpoint is invalid")
 	}
 	return nil
 }
@@ -139,12 +192,19 @@ func (s S3CompatibleStore) Delete(ctx context.Context, key string) error {
 }
 
 func (s S3CompatibleStore) request(ctx context.Context, method, key string, payload []byte, contentType string) (*http.Request, error) {
-	if err := s.Health(ctx); err != nil {
+	if err := s.validate(); err != nil {
 		return nil, err
 	}
 	endpoint := strings.TrimRight(s.Endpoint, "/")
 	escapedKey := strings.TrimLeft(filepath.ToSlash(filepath.Clean(key)), "/")
-	target, err := url.Parse(endpoint + "/" + s.Bucket + "/" + escapedKey)
+	if escapedKey == "." {
+		escapedKey = ""
+	}
+	targetURL := endpoint + "/" + s.Bucket
+	if escapedKey != "" {
+		targetURL += "/" + escapedKey
+	}
+	target, err := url.Parse(targetURL)
 	if err != nil {
 		return nil, err
 	}

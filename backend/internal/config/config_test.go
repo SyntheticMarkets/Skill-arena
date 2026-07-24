@@ -22,6 +22,24 @@ func TestLoadRuntimeSettingsReadsEnvironmentOverrides(t *testing.T) {
 	}
 }
 
+func TestPaymentRoutingConfigurationIsProviderNeutral(t *testing.T) {
+	t.Setenv("SKILL_ARENA_PAYMENT_ACTIVE_PROVIDERS", "peach,ozow")
+	t.Setenv("SKILL_ARENA_PAYMENT_DEFAULT_PROVIDER", "peach")
+	t.Setenv("SKILL_ARENA_PAYMENT_ROUTES", `{
+		"PEACH":{"countries":["za"],"currencies":["zar"],"methods":["CARD"],"priority":120,"variableCostBps":250},
+		"ozow":{"countries":["ZA"],"currencies":["ZAR"],"methods":["eft"],"priority":110,"fixedCostMinor":50}
+	}`)
+
+	settings := LoadRuntimeSettings().Payments
+	if settings.DefaultProvider != "peach" || len(settings.ActiveProviders) != 2 || settings.ProviderConfigError != "" {
+		t.Fatalf("payment settings=%+v", settings)
+	}
+	route := settings.ProviderRoutes["peach"]
+	if route.Countries[0] != "ZA" || route.Currencies[0] != "ZAR" || route.Methods[0] != "card" {
+		t.Fatalf("normalized route=%+v", route)
+	}
+}
+
 func TestProductionRequiresPostgreSQLAndSecretsFromEnvironment(t *testing.T) {
 	t.Setenv("SKILL_ARENA_ENV", "production")
 	t.Setenv("SKILL_ARENA_DATABASE_URL", "./data")
@@ -46,6 +64,16 @@ func TestProductionConfigurationAcceptsExternalServiceURLs(t *testing.T) {
 	t.Setenv("SKILL_ARENA_SMTP_PORT", "587")
 	t.Setenv("SKILL_ARENA_EMAIL_FROM", "security@arena.example.com")
 	t.Setenv("SKILL_ARENA_ALLOWED_ORIGINS", "https://arena.example.com")
+	t.Setenv("SKILL_ARENA_STRIPE_SECRET_KEY", "sk_live_production_configuration_test")
+	t.Setenv("SKILL_ARENA_STRIPE_WEBHOOK_SECRET", "whsec_production_configuration_test")
+	t.Setenv("SKILL_ARENA_STRIPE_MODE", "live")
+	t.Setenv("SKILL_ARENA_PAYMENT_ACTIVE_PROVIDERS", "stripe")
+	t.Setenv("SKILL_ARENA_PAYMENT_DEFAULT_PROVIDER", "stripe")
+	t.Setenv("SKILL_ARENA_STORAGE_PROVIDER", "s3-compatible")
+	t.Setenv("SKILL_ARENA_S3_ENDPOINT", "https://objects.example.com")
+	t.Setenv("SKILL_ARENA_S3_BUCKET", "skill-arena")
+	t.Setenv("SKILL_ARENA_S3_ACCESS_KEY", "production-storage-access")
+	t.Setenv("SKILL_ARENA_S3_SECRET_KEY", "production-storage-secret")
 
 	cfg, err := Load()
 	if err != nil {

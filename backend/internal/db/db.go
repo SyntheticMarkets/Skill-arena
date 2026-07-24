@@ -37,50 +37,62 @@ import (
 )
 
 type Store struct {
-	mu             sync.RWMutex
-	users          map[string]*models.User
-	wallets        map[string]*models.Wallet
-	sessions       map[string]*models.GameSession
-	ledger         map[string][]*models.LedgerEntry
-	devices        map[string][]*models.Device
-	profiles       map[string]*models.Progression
-	awards         map[string][]*models.Achievement
-	auth           map[string]*models.AuthSession
-	authTokens     map[string]*models.AuthToken
-	mfa            map[string]*models.MFASettings
-	passwords      map[string][]*models.PasswordHistoryEntry
-	loginSecurity  map[string]*models.LoginSecurityState
-	audit          []*models.AuditLog
-	treasury       *models.TreasuryState
-	season         *models.Season
-	tournaments    map[string]*models.Tournament
-	participants   map[string][]*models.TournamentParticipant
-	tMatches       map[string][]*models.TournamentMatch
-	tSubmissions   map[string][]*models.TournamentSubmission
-	baselines      map[string]*models.BehavioralBaseline
-	telemetry      map[string][]*models.GameplayTelemetry
-	reviewCases    map[string]*models.ReviewCase
-	metrics        *models.MetricsSnapshot
-	jobs           map[string]*models.BackgroundJob
-	workerHealth   map[string]*models.WorkerHealth
-	backups        []*models.BackupRecord
-	cache          *cache.Cache
-	arenaRegistry  *arenaregistry.Registry
-	settings       *config.RuntimeSettings
-	pvpMatches     map[string]*models.PvPMatch
-	pvpSubmissions map[string][]*models.PvPSubmission
-	puzzleRepo     *puzzle.MemoryRepository
-	payments       map[string]*models.PaymentProviderSession
-	withdrawals    map[string]*models.WithdrawalRequest
-	amlReviews     map[string]*models.AMLReview
-	playerProfiles map[string]*models.PlayerProfile
-	notifications  map[string][]*models.Notification
-	supportTickets map[string][]*models.SupportTicket
-	dataDir        string
-	persistence    string
-	pg             *sql.DB
-	redis          saredis.Client
-	objects        storage.ObjectStore
+	mu                   sync.RWMutex
+	financialGate        sync.Mutex
+	users                map[string]*models.User
+	wallets              map[string]*models.Wallet
+	sessions             map[string]*models.GameSession
+	ledger               map[string][]*models.LedgerEntry
+	devices              map[string][]*models.Device
+	profiles             map[string]*models.Progression
+	awards               map[string][]*models.Achievement
+	auth                 map[string]*models.AuthSession
+	authTokens           map[string]*models.AuthToken
+	mfa                  map[string]*models.MFASettings
+	passwords            map[string][]*models.PasswordHistoryEntry
+	loginSecurity        map[string]*models.LoginSecurityState
+	audit                []*models.AuditLog
+	treasury             *models.TreasuryState
+	season               *models.Season
+	tournaments          map[string]*models.Tournament
+	participants         map[string][]*models.TournamentParticipant
+	tMatches             map[string][]*models.TournamentMatch
+	tSubmissions         map[string][]*models.TournamentSubmission
+	baselines            map[string]*models.BehavioralBaseline
+	telemetry            map[string][]*models.GameplayTelemetry
+	reviewCases          map[string]*models.ReviewCase
+	metrics              *models.MetricsSnapshot
+	jobs                 map[string]*models.BackgroundJob
+	workerHealth         map[string]*models.WorkerHealth
+	backups              []*models.BackupRecord
+	cache                *cache.Cache
+	arenaRegistry        *arenaregistry.Registry
+	settings             *config.RuntimeSettings
+	pvpMatches           map[string]*models.PvPMatch
+	pvpSubmissions       map[string][]*models.PvPSubmission
+	puzzleRepo           *puzzle.MemoryRepository
+	payments             map[string]*models.PaymentProviderSession
+	withdrawals          map[string]*models.WithdrawalRequest
+	amlReviews           map[string]*models.AMLReview
+	playerProfiles       map[string]*models.PlayerProfile
+	notifications        map[string][]*models.Notification
+	supportTickets       map[string][]*models.SupportTicket
+	financialWallets     map[string]*models.FinancialWallet
+	financialDeposits    map[string]*models.FinancialDeposit
+	financialWithdrawals map[string]*models.FinancialWithdrawal
+	financialAssessments map[string]*models.FinancialAssessment
+	financialLimits      map[string]*models.FinancialLimits
+	financialJournal     map[string][]models.FinancialLedgerEntry
+	financialWebhooks    map[string]string
+	financialEvidence    map[string]*models.FinancialEvidence
+	financialArtifacts   map[string]*models.FinancialArtifact
+	payoutDestinations   map[string]*models.FinancialPayoutDestination
+	treasuryChecks       map[string]*models.TreasuryReserveCheck
+	dataDir              string
+	persistence          string
+	pg                   *sql.DB
+	redis                saredis.Client
+	objects              storage.ObjectStore
 }
 
 type Options struct {
@@ -202,48 +214,59 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 	}
 
 	store := &Store{
-		users:          map[string]*models.User{},
-		wallets:        map[string]*models.Wallet{},
-		sessions:       map[string]*models.GameSession{},
-		ledger:         map[string][]*models.LedgerEntry{},
-		devices:        map[string][]*models.Device{},
-		profiles:       map[string]*models.Progression{},
-		awards:         map[string][]*models.Achievement{},
-		auth:           map[string]*models.AuthSession{},
-		authTokens:     map[string]*models.AuthToken{},
-		mfa:            map[string]*models.MFASettings{},
-		passwords:      map[string][]*models.PasswordHistoryEntry{},
-		loginSecurity:  map[string]*models.LoginSecurityState{},
-		audit:          []*models.AuditLog{},
-		treasury:       defaultTreasuryState(),
-		season:         defaultSeason(),
-		tournaments:    map[string]*models.Tournament{},
-		participants:   map[string][]*models.TournamentParticipant{},
-		tMatches:       map[string][]*models.TournamentMatch{},
-		tSubmissions:   map[string][]*models.TournamentSubmission{},
-		baselines:      map[string]*models.BehavioralBaseline{},
-		telemetry:      map[string][]*models.GameplayTelemetry{},
-		reviewCases:    map[string]*models.ReviewCase{},
-		metrics:        &models.MetricsSnapshot{},
-		jobs:           map[string]*models.BackgroundJob{},
-		workerHealth:   map[string]*models.WorkerHealth{},
-		backups:        []*models.BackupRecord{},
-		cache:          cache.New(),
-		arenaRegistry:  arenaregistry.New(mazegame.New()),
-		settings:       config.Runtime(),
-		pvpMatches:     map[string]*models.PvPMatch{},
-		pvpSubmissions: map[string][]*models.PvPSubmission{},
-		puzzleRepo:     puzzle.NewMemoryRepository(),
-		payments:       map[string]*models.PaymentProviderSession{},
-		withdrawals:    map[string]*models.WithdrawalRequest{},
-		amlReviews:     map[string]*models.AMLReview{},
-		playerProfiles: map[string]*models.PlayerProfile{},
-		notifications:  map[string][]*models.Notification{},
-		supportTickets: map[string][]*models.SupportTicket{},
-		dataDir:        dataDir,
-		persistence:    persistence,
-		redis:          redisClient,
-		objects:        objectStore,
+		users:                map[string]*models.User{},
+		wallets:              map[string]*models.Wallet{},
+		sessions:             map[string]*models.GameSession{},
+		ledger:               map[string][]*models.LedgerEntry{},
+		devices:              map[string][]*models.Device{},
+		profiles:             map[string]*models.Progression{},
+		awards:               map[string][]*models.Achievement{},
+		auth:                 map[string]*models.AuthSession{},
+		authTokens:           map[string]*models.AuthToken{},
+		mfa:                  map[string]*models.MFASettings{},
+		passwords:            map[string][]*models.PasswordHistoryEntry{},
+		loginSecurity:        map[string]*models.LoginSecurityState{},
+		audit:                []*models.AuditLog{},
+		treasury:             defaultTreasuryState(),
+		season:               defaultSeason(),
+		tournaments:          map[string]*models.Tournament{},
+		participants:         map[string][]*models.TournamentParticipant{},
+		tMatches:             map[string][]*models.TournamentMatch{},
+		tSubmissions:         map[string][]*models.TournamentSubmission{},
+		baselines:            map[string]*models.BehavioralBaseline{},
+		telemetry:            map[string][]*models.GameplayTelemetry{},
+		reviewCases:          map[string]*models.ReviewCase{},
+		metrics:              &models.MetricsSnapshot{},
+		jobs:                 map[string]*models.BackgroundJob{},
+		workerHealth:         map[string]*models.WorkerHealth{},
+		backups:              []*models.BackupRecord{},
+		cache:                cache.New(),
+		arenaRegistry:        arenaregistry.New(mazegame.New()),
+		settings:             config.Runtime(),
+		pvpMatches:           map[string]*models.PvPMatch{},
+		pvpSubmissions:       map[string][]*models.PvPSubmission{},
+		puzzleRepo:           puzzle.NewMemoryRepository(),
+		payments:             map[string]*models.PaymentProviderSession{},
+		withdrawals:          map[string]*models.WithdrawalRequest{},
+		amlReviews:           map[string]*models.AMLReview{},
+		playerProfiles:       map[string]*models.PlayerProfile{},
+		notifications:        map[string][]*models.Notification{},
+		supportTickets:       map[string][]*models.SupportTicket{},
+		financialWallets:     map[string]*models.FinancialWallet{},
+		financialDeposits:    map[string]*models.FinancialDeposit{},
+		financialWithdrawals: map[string]*models.FinancialWithdrawal{},
+		financialAssessments: map[string]*models.FinancialAssessment{},
+		financialLimits:      map[string]*models.FinancialLimits{},
+		financialJournal:     map[string][]models.FinancialLedgerEntry{},
+		financialWebhooks:    map[string]string{},
+		financialEvidence:    map[string]*models.FinancialEvidence{},
+		financialArtifacts:   map[string]*models.FinancialArtifact{},
+		payoutDestinations:   map[string]*models.FinancialPayoutDestination{},
+		treasuryChecks:       map[string]*models.TreasuryReserveCheck{},
+		dataDir:              dataDir,
+		persistence:          persistence,
+		redis:                redisClient,
+		objects:              objectStore,
 	}
 
 	if persistence == "postgres" {
@@ -765,7 +788,10 @@ CREATE INDEX IF NOT EXISTS idx_financial_idempotency_user_operation ON financial
 	if err := s.initPostgresAuth(ctx); err != nil {
 		return err
 	}
-	return s.initPostgresHub(ctx)
+	if err := s.initPostgresHub(ctx); err != nil {
+		return err
+	}
+	return s.initPostgresFinancial(ctx)
 }
 
 func (s *Store) loadPostgresSnapshot(ctx context.Context) (bool, error) {
@@ -4235,6 +4261,13 @@ func (s *Store) Redis() saredis.Client {
 
 func (s *Store) ObjectStore() storage.ObjectStore {
 	return s.objects
+}
+
+func (s *Store) ObjectStorageHealth(ctx context.Context) error {
+	if s.objects == nil {
+		return errors.New("object storage is not configured")
+	}
+	return s.objects.Health(ctx)
 }
 
 func (s *Store) ExportSnapshotJSON(ctx context.Context) ([]byte, error) {

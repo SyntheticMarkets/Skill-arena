@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/mail"
@@ -71,6 +72,7 @@ type RuntimeSettings struct {
 	Email       EmailSettings
 	MFA         MFASettings
 	Payments    PaymentSettings
+	Financial   FinancialSettings
 	Storage     StorageSettings
 	CORS        CORSSettings
 }
@@ -199,14 +201,45 @@ type MFASettings struct {
 }
 
 type PaymentSettings struct {
-	DefaultProvider   string
-	PayFastMerchantID string
-	PayFastPassphrase string
-	OzowSiteCode      string
-	OzowPrivateKey    string
-	CardProvider      string
-	BankEFTProvider   string
-	CryptoProvider    string
+	DefaultProvider     string
+	ActiveProviders     []string
+	ProviderRoutes      map[string]PaymentProviderRoute
+	ProviderConfigError string
+	StripeSecretKey     string
+	StripeWebhookSecret string
+	StripeAPIBase       string
+	StripeMode          string
+}
+
+type PaymentProviderRoute struct {
+	Countries       []string `json:"countries"`
+	Currencies      []string `json:"currencies"`
+	Methods         []string `json:"methods"`
+	Priority        int      `json:"priority"`
+	VariableCostBPS int      `json:"variableCostBps"`
+	FixedCostMinor  int64    `json:"fixedCostMinor"`
+}
+
+type FinancialSettings struct {
+	DefaultCountry string
+	Jurisdictions  map[string]JurisdictionFinancialPolicy
+	PolicyError    string
+}
+
+type JurisdictionFinancialPolicy struct {
+	Currency               string   `json:"currency"`
+	MinimumAge             int      `json:"minimumAge"`
+	PaymentMethods         []string `json:"paymentMethods"`
+	SourceOfFundsRequired  bool     `json:"sourceOfFundsRequired"`
+	DailyDepositMinor      int64    `json:"dailyDepositMinor"`
+	MonthlyDepositMinor    int64    `json:"monthlyDepositMinor"`
+	DailyWithdrawalMinor   int64    `json:"dailyWithdrawalMinor"`
+	MonthlyWithdrawalMinor int64    `json:"monthlyWithdrawalMinor"`
+}
+
+func (f FinancialSettings) Policy(country string) (JurisdictionFinancialPolicy, bool) {
+	policy, ok := f.Jurisdictions[strings.ToUpper(strings.TrimSpace(country))]
+	return policy, ok
 }
 
 type StorageSettings struct {
@@ -225,19 +258,14 @@ type CORSSettings struct {
 
 func (p PaymentSettings) ProviderStatus() map[string]bool {
 	return map[string]bool{
-		"payfast":  p.PayFastMerchantID != "" && p.PayFastPassphrase != "",
-		"ozow":     p.OzowSiteCode != "" && p.OzowPrivateKey != "",
-		"card":     p.CardProvider != "",
-		"bank_eft": p.BankEFTProvider != "",
-		"crypto":   p.CryptoProvider != "",
+		"stripe": p.StripeSecretKey != "" && p.StripeWebhookSecret != "" && p.StripeAPIBase != "",
 	}
 }
 
 func (p PaymentSettings) EnabledProviders() []string {
-	status := p.ProviderStatus()
-	enabled := make([]string, 0, len(status))
-	for provider, ok := range status {
-		if ok {
+	enabled := make([]string, 0, len(p.ActiveProviders))
+	for _, provider := range p.ActiveProviders {
+		if p.ProviderStatus()[provider] {
 			enabled = append(enabled, provider)
 		}
 	}
@@ -355,16 +383,8 @@ func LoadRuntimeSettings() *RuntimeSettings {
 			EncryptionKey: envString("SKILL_ARENA_MFA_ENCRYPTION_KEY", envString("SKILL_ARENA_JWT_SECRET", "")),
 			Issuer:        envString("SKILL_ARENA_MFA_ISSUER", "Skill Arena"),
 		},
-		Payments: PaymentSettings{
-			DefaultProvider:   envString("SKILL_ARENA_PAYMENT_DEFAULT_PROVIDER", "payfast"),
-			PayFastMerchantID: envString("SKILL_ARENA_PAYFAST_MERCHANT_ID", ""),
-			PayFastPassphrase: envString("SKILL_ARENA_PAYFAST_PASSPHRASE", ""),
-			OzowSiteCode:      envString("SKILL_ARENA_OZOW_SITE_CODE", ""),
-			OzowPrivateKey:    envString("SKILL_ARENA_OZOW_PRIVATE_KEY", ""),
-			CardProvider:      envString("SKILL_ARENA_CARD_PROVIDER", ""),
-			BankEFTProvider:   envString("SKILL_ARENA_BANK_EFT_PROVIDER", ""),
-			CryptoProvider:    envString("SKILL_ARENA_CRYPTO_PROVIDER", ""),
-		},
+		Payments:  loadPaymentSettings(),
+		Financial: loadFinancialSettings(),
 		Storage: StorageSettings{
 			Provider:  strings.ToLower(envString("SKILL_ARENA_STORAGE_PROVIDER", "local")),
 			LocalRoot: envString("SKILL_ARENA_STORAGE_LOCAL_ROOT", "./data/objects"),
@@ -415,6 +435,25 @@ func validateProduction(cfg *Config) error {
 			return fmt.Errorf("production CORS origin %q must be an explicit HTTPS origin", origin)
 		}
 	}
+	if cfg.Settings.Financial.PolicyError != "" {
+		return fmt.Errorf("invalid SKILL_ARENA_FINANCIAL_POLICIES: %s", cfg.Settings.Financial.PolicyError)
+	}
+	if cfg.Settings.Payments.ProviderConfigError != "" {
+		return fmt.Errorf("invalid SKILL_ARENA_PAYMENT_ROUTES: %s", cfg.Settings.Payments.ProviderConfigError)
+	}
+	if len(cfg.Settings.Payments.ActiveProviders) == 0 {
+		return errors.New("production requires at least one active payment provider adapter")
+	}
+	if !containsString(cfg.Settings.Payments.ActiveProviders, cfg.Settings.Payments.DefaultProvider) {
+		return errors.New("production default payment provider must be active")
+	}
+	if !strings.EqualFold(cfg.Settings.Storage.Provider, "s3") && !strings.EqualFold(cfg.Settings.Storage.Provider, "s3-compatible") {
+		return errors.New("production requires S3-compatible object storage")
+	}
+	if cfg.Settings.Storage.Endpoint == "" || cfg.Settings.Storage.Bucket == "" ||
+		cfg.Settings.Storage.AccessKey == "" || cfg.Settings.Storage.SecretKey == "" {
+		return errors.New("production S3-compatible object storage credentials are incomplete")
+	}
 	return nil
 }
 
@@ -437,6 +476,111 @@ func (s *RuntimeSettings) FeatureEnabled(name string) bool {
 	default:
 		return false
 	}
+}
+
+func loadFinancialSettings() FinancialSettings {
+	settings := FinancialSettings{
+		DefaultCountry: strings.ToUpper(envString("SKILL_ARENA_FINANCIAL_DEFAULT_COUNTRY", "ZA")),
+		Jurisdictions: map[string]JurisdictionFinancialPolicy{
+			"ZA": {
+				Currency: "ZAR", MinimumAge: 18,
+				PaymentMethods:        []string{"card", "eft", "bank_transfer"},
+				SourceOfFundsRequired: true,
+				DailyDepositMinor:     500_00, MonthlyDepositMinor: 5_000_00,
+				DailyWithdrawalMinor: 250_00, MonthlyWithdrawalMinor: 2_500_00,
+			},
+		},
+	}
+	raw := strings.TrimSpace(os.Getenv("SKILL_ARENA_FINANCIAL_POLICIES"))
+	if raw == "" {
+		return settings
+	}
+	var policies map[string]JurisdictionFinancialPolicy
+	if err := json.Unmarshal([]byte(raw), &policies); err != nil {
+		settings.PolicyError = err.Error()
+		return settings
+	}
+	normalized := make(map[string]JurisdictionFinancialPolicy, len(policies))
+	for country, policy := range policies {
+		country = strings.ToUpper(strings.TrimSpace(country))
+		policy.Currency = strings.ToUpper(strings.TrimSpace(policy.Currency))
+		if len(country) != 2 || len(policy.Currency) != 3 || policy.MinimumAge < 18 ||
+			policy.DailyDepositMinor < 0 || policy.MonthlyDepositMinor < policy.DailyDepositMinor ||
+			policy.DailyWithdrawalMinor < 0 || policy.MonthlyWithdrawalMinor < policy.DailyWithdrawalMinor {
+			settings.PolicyError = "each jurisdiction requires a country, currency, minimum age, and valid minor-unit limits"
+			return settings
+		}
+		normalized[country] = policy
+	}
+	if len(normalized) == 0 {
+		settings.PolicyError = "at least one jurisdiction is required"
+		return settings
+	}
+	settings.Jurisdictions = normalized
+	return settings
+}
+
+func loadPaymentSettings() PaymentSettings {
+	settings := PaymentSettings{
+		DefaultProvider:     strings.ToLower(envString("SKILL_ARENA_PAYMENT_DEFAULT_PROVIDER", "")),
+		ActiveProviders:     envList("SKILL_ARENA_PAYMENT_ACTIVE_PROVIDERS", nil),
+		ProviderRoutes:      map[string]PaymentProviderRoute{},
+		StripeSecretKey:     envString("SKILL_ARENA_STRIPE_SECRET_KEY", ""),
+		StripeWebhookSecret: envString("SKILL_ARENA_STRIPE_WEBHOOK_SECRET", ""),
+		StripeAPIBase:       envString("SKILL_ARENA_STRIPE_API_BASE", "https://api.stripe.com"),
+		StripeMode:          strings.ToLower(envString("SKILL_ARENA_STRIPE_MODE", "sandbox")),
+	}
+	raw := strings.TrimSpace(os.Getenv("SKILL_ARENA_PAYMENT_ROUTES"))
+	if raw != "" {
+		var routes map[string]PaymentProviderRoute
+		if err := json.Unmarshal([]byte(raw), &routes); err != nil {
+			settings.ProviderConfigError = err.Error()
+		} else {
+			for provider, route := range routes {
+				provider = strings.ToLower(strings.TrimSpace(provider))
+				if provider == "" || route.Priority < 0 || route.VariableCostBPS < 0 || route.FixedCostMinor < 0 {
+					settings.ProviderConfigError = "provider routes require an ID and non-negative priority and costs"
+					break
+				}
+				route.Countries = normalizeUpperList(route.Countries)
+				route.Currencies = normalizeUpperList(route.Currencies)
+				route.Methods = normalizeLowerList(route.Methods)
+				settings.ProviderRoutes[provider] = route
+			}
+		}
+	}
+	return settings
+}
+
+func normalizeUpperList(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToUpper(strings.TrimSpace(value))
+		if value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func normalizeLowerList(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if strings.EqualFold(value, target) {
+			return true
+		}
+	}
+	return false
 }
 
 var runtimeSettings = LoadRuntimeSettings()
