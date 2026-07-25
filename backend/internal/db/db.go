@@ -88,6 +88,12 @@ type Store struct {
 	financialArtifacts   map[string]*models.FinancialArtifact
 	payoutDestinations   map[string]*models.FinancialPayoutDestination
 	treasuryChecks       map[string]*models.TreasuryReserveCheck
+	crmInternalNotes     map[string][]models.CRMInternalNote
+	crmRestrictions      map[string][]models.CRMRestriction
+	crmSupportMessages   map[string][]models.CRMSupportMessage
+	crmProviderResponses map[string][]models.CRMComplianceProviderResponse
+	crmJurisdictions     map[string]*models.CRMJurisdictionPolicy
+	crmAnnouncements     map[string]*models.CRMAnnouncement
 	dataDir              string
 	persistence          string
 	pg                   *sql.DB
@@ -263,6 +269,12 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 		financialArtifacts:   map[string]*models.FinancialArtifact{},
 		payoutDestinations:   map[string]*models.FinancialPayoutDestination{},
 		treasuryChecks:       map[string]*models.TreasuryReserveCheck{},
+		crmInternalNotes:     map[string][]models.CRMInternalNote{},
+		crmRestrictions:      map[string][]models.CRMRestriction{},
+		crmSupportMessages:   map[string][]models.CRMSupportMessage{},
+		crmProviderResponses: map[string][]models.CRMComplianceProviderResponse{},
+		crmJurisdictions:     map[string]*models.CRMJurisdictionPolicy{},
+		crmAnnouncements:     map[string]*models.CRMAnnouncement{},
 		dataDir:              dataDir,
 		persistence:          persistence,
 		redis:                redisClient,
@@ -791,7 +803,10 @@ CREATE INDEX IF NOT EXISTS idx_financial_idempotency_user_operation ON financial
 	if err := s.initPostgresHub(ctx); err != nil {
 		return err
 	}
-	return s.initPostgresFinancial(ctx)
+	if err := s.initPostgresFinancial(ctx); err != nil {
+		return err
+	}
+	return s.initPostgresAdminCRM(ctx)
 }
 
 func (s *Store) loadPostgresSnapshot(ctx context.Context) (bool, error) {
@@ -4128,15 +4143,22 @@ func (s *Store) AppendAuditLog(ctx context.Context, actorID, action, targetID, i
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.audit = append(s.audit, &models.AuditLog{
-		ID:        newUUID(),
-		ActorID:   actorID,
-		Action:    action,
-		TargetID:  targetID,
-		Metadata:  metadata,
-		IPAddress: ipAddress,
-		CreatedAt: time.Now().UTC(),
-	})
+	previous := ""
+	if len(s.audit) > 0 {
+		previous = s.audit[len(s.audit)-1].EntryHash
+	}
+	log := &models.AuditLog{
+		ID:           newUUID(),
+		ActorID:      actorID,
+		Action:       action,
+		TargetID:     targetID,
+		Metadata:     metadata,
+		IPAddress:    ipAddress,
+		CreatedAt:    time.Now().UTC(),
+		PreviousHash: previous,
+	}
+	log.EntryHash = auditHash(log.PreviousHash, log.ID, log.ActorID, log.Action, log.TargetID, log.IPAddress, log.Metadata, log.CreatedAt)
+	s.audit = append(s.audit, log)
 	return s.persistAuditLogs()
 }
 
@@ -4301,6 +4323,52 @@ func (s *Store) isConfiguredSuperAdminEmailLocked(email string) bool {
 }
 
 func (s *Store) UpdateUserRole(ctx context.Context, actorID, targetID, role, ipAddress string) (*models.User, error) {
+	if !validCRMRole(role) {
+		return nil, errors.New("role is invalid")
+	}
+	if s.usesPostgresAuth() {
+		actor, err := s.pgGetUserByID(ctx, actorID)
+		if err != nil || actor.Role != models.RoleSuperAdmin {
+			return nil, errors.New("super admin role required")
+		}
+		target, err := s.pgGetUserByID(ctx, targetID)
+		if err != nil {
+			return nil, errors.New("user not found")
+		}
+		s.mu.RLock()
+		configuredSuperAdmin := s.isConfiguredSuperAdminEmailLocked(target.Email)
+		s.mu.RUnlock()
+		if configuredSuperAdmin && role != models.RoleSuperAdmin {
+			return nil, errors.New("configured super admin cannot be demoted")
+		}
+		now := time.Now().UTC()
+		tx, err := s.pg.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, `UPDATE users SET role=$1,hidden_from_public=$2,updated_at=$3 WHERE id=$4`,
+			role, role != models.RolePlayer, now, targetID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE auth_sessions SET revoked_at=$1 WHERE user_id=$2 AND revoked_at IS NULL`, now, targetID); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		if cached := s.users[targetID]; cached != nil {
+			cached.Role, cached.HiddenFromPublic, cached.UpdatedAt = role, role != models.RolePlayer, now
+		}
+		s.mu.Unlock()
+		if err := s.AppendAuditLog(ctx, actorID, "admin.role.updated", targetID, ipAddress, map[string]string{
+			"previous": target.Role, "new": role,
+		}); err != nil {
+			return nil, err
+		}
+		return s.GetUserByID(ctx, targetID)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	actor := s.users[actorID]
@@ -4340,6 +4408,17 @@ func (s *Store) UpdateUserRole(ctx context.Context, actorID, targetID, role, ipA
 	return &copyUser, nil
 }
 
+func validCRMRole(role string) bool {
+	switch role {
+	case models.RolePlayer, models.RoleAdmin, models.RoleSuperAdmin, models.RoleTreasuryManager,
+		models.RoleFraudAnalyst, models.RoleSupport, models.RoleModerator, models.RoleCompliance,
+		models.RoleFinance, models.RoleOperations, models.RoleReadOnly:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Store) SuspendAdmin(ctx context.Context, actorID, targetID, ipAddress string) (*models.User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -4375,6 +4454,35 @@ func (s *Store) SuspendAdmin(ctx context.Context, actorID, targetID, ipAddress s
 }
 
 func (s *Store) ResetAdminMFA(ctx context.Context, actorID, targetID, ipAddress string) error {
+	if s.usesPostgresAuth() {
+		actor, err := s.pgGetUserByID(ctx, actorID)
+		if err != nil || actor.Role != models.RoleSuperAdmin {
+			return errors.New("super admin role required")
+		}
+		if _, err := s.pgGetUserByID(ctx, targetID); err != nil {
+			return errors.New("user not found")
+		}
+		now := time.Now().UTC()
+		tx, err := s.pg.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, `UPDATE mfa_settings SET enabled=FALSE,totp_secret_ciphertext=NULL,
+			recovery_code_hashes='{}',confirmed_at=NULL,updated_at=$1 WHERE user_id=$2`, now, targetID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE auth_sessions SET revoked_at=$1 WHERE user_id=$2 AND revoked_at IS NULL`, now, targetID); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		delete(s.mfa, targetID)
+		s.mu.Unlock()
+		return s.AppendAuditLog(ctx, actorID, "admin.mfa.reset", targetID, ipAddress, nil)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	actor := s.users[actorID]

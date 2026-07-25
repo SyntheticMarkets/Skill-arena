@@ -206,6 +206,53 @@ func SupportTicketsHandler(store *db.Store) http.HandlerFunc {
 	}
 }
 
+func SupportAttachmentsHandler(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := UserIDFromContext(r.Context())
+		if r.Method == http.MethodGet {
+			attachmentID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/support/attachments/"), "/")
+			item, data, err := store.GetSupportAttachment(r.Context(), attachmentID)
+			if err != nil || item.UserID != userID {
+				WriteAPIError(w, http.StatusNotFound, ErrNotFound, "support attachment was not found")
+				return
+			}
+			w.Header().Set("Content-Type", item.ContentType)
+			w.Header().Set("Content-Disposition", `attachment; filename="`+item.FileName+`"`)
+			w.Header().Set("X-Content-SHA256", item.SHA256)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(data)
+			return
+		}
+		if r.Method != http.MethodPost {
+			WriteAPIError(w, http.StatusMethodNotAllowed, ErrInvalidRequest, "method is not allowed")
+			return
+		}
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "attachment must be no larger than 10 MiB")
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "attachment file is required")
+			return
+		}
+		defer file.Close()
+		data, err := io.ReadAll(io.LimitReader(file, (10<<20)+1))
+		if err != nil || len(data) > 10<<20 {
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, "attachment must be no larger than 10 MiB")
+			return
+		}
+		contentType := http.DetectContentType(data)
+		item, err := store.StoreSupportAttachment(r.Context(), userID, r.FormValue("ticketId"), header.Filename, contentType, data)
+		if err != nil {
+			WriteAPIError(w, http.StatusBadRequest, ErrInvalidRequest, err.Error())
+			return
+		}
+		_ = store.AppendAuditLog(r.Context(), userID, "support.attachment.created", item.ID, clientIP(r), map[string]string{"ticketId": item.TicketID})
+		writeJSON(w, http.StatusCreated, item)
+	}
+}
+
 func validAvatarKey(value string) bool {
 	switch value {
 	case "", "vanguard", "strategist", "pathfinder", "accelerator":

@@ -55,7 +55,7 @@ Do not create frontend placeholders that depend on unfinished backend work. Do n
 
 ### Release 1.0 Architecture
 
-Status: **Stable core established; Sprint 4 planning is next.**
+Status: **Sprints 1-4 complete and frozen. Sprint 5 has not begun.**
 
 Release 1.0 is organized as independently owned product domains. A frozen domain may receive bug fixes, security fixes, performance work, scalability work, or integration support, but its business contract may not be silently redesigned by a later sprint.
 
@@ -71,7 +71,7 @@ Skill Arena Release 1.0
 +-- Sprint 3: Financial Platform              [FROZEN]
 |   `-- tag: sprint-3-v1.0-freeze
 |
-+-- Sprint 4: Admin CRM                       [NOT STARTED - PLANNING GATE]
++-- Sprint 4: Admin CRM                       [COMPLETE - FROZEN]
 |
 +-- Sprint 5: Realtime Arena                  [PLANNED]
 |
@@ -88,7 +88,7 @@ Skill Arena Release 1.0
 | 1 | Identity & Security | Registration, verification, authentication, MFA, sessions, devices, and account recovery | Frozen |
 | 2 | Player Platform | Arena Hub, navigation, player profile, notifications, support entry, and game discovery | Frozen |
 | 3 | Financial Platform | Wallet, ledger, deposits, withdrawals, limits, assessments, responsible gaming, Payment Core, and Treasury contracts | Frozen |
-| 4 | Admin CRM | Separate staff identity, permissions, operations, compliance, finance, support, audit, and monitoring application | Not started - planning gate |
+| 4 | Admin CRM | Separate staff identity, permissions, operations, compliance, finance, support, audit, and monitoring application | Complete - frozen at `sprint-4-v1.0-freeze` |
 | 5 | Realtime Arena | Authenticated gateway, presence, live events, reconnect, ordering, and distributed coordination | Planned |
 | 6 | Maze Arena | Deterministic puzzle pipeline, authoritative gameplay, PvP, replay, and game-specific presentation | Planned |
 | 7 | Competition Platform | Tournament, season, leaderboard, reward, spectator, dispute, and competition settlement lifecycles | Planned |
@@ -441,7 +441,7 @@ Required foundation work:
 
 Visible outcome: players can understand and control their complete financial relationship with Skill Arena through a provider-independent wallet, deposit and withdrawal lifecycles, limits, financial assessment, responsible gaming controls, and transparent status timelines.
 
-Implementation status: **COMPLETE AND APPROVED**. The approved freeze is identified by the annotated tag `sprint-3-v1.0-freeze`. Sprint 4 has not begun.
+Implementation status: **COMPLETE AND APPROVED**. The approved freeze is identified by the annotated tag `sprint-3-v1.0-freeze`. Sprint 4 subsequently completed and is frozen independently.
 
 Required foundation work:
 
@@ -464,7 +464,7 @@ Required foundation work:
 
 Validation date: 2026-07-24.
 
-Sprint 3 is approved for feature freeze. Payment-provider onboarding is a post-freeze deployment milestone. Sprint 4 has not begun.
+Sprint 3 is approved for feature freeze. Payment-provider onboarding is a post-freeze deployment milestone. Sprint 4 subsequently completed without changing the frozen Financial Platform contract.
 
 | Gate | Status | Evidence |
 |---|---|---|
@@ -519,7 +519,7 @@ Remaining deployment and external approval work:
 | High | Jurisdiction approval | Obtain legal/compliance approval for the ZA launch rules, identity checks, sanctions/PEP provider, source-of-funds thresholds, retention, responsible-gaming limits, and supported payment methods. This is an external policy approval, not unfinished application code. |
 | Medium | Container validation | Exercise the pinned Compose stack in CI or staging because Docker is unavailable on this workstation. |
 
-Freeze decision: **SPRINT 3 APPROVED.** The provider-independent Financial Platform is complete. Implementing and certifying the commercially selected production adapter remains a deployment task. Sprint 4 has not begun.
+Freeze decision: **SPRINT 3 APPROVED.** The provider-independent Financial Platform is complete. Implementing and certifying the commercially selected production adapter remains a deployment task. Sprint 4 subsequently consumed this contract through permission-protected APIs.
 
 Completion-phase file inventory:
 
@@ -667,7 +667,7 @@ An adapter may be enabled in production only after:
 
 ### Sprint 4: Admin CRM
 
-Status: **NOT STARTED**.
+Status: **COMPLETE AND FROZEN** at annotated tag `sprint-4-v1.0-freeze`.
 
 Objective: build the operational and compliance control center as a standalone application. The player platform must contain no administrative functionality.
 
@@ -693,9 +693,89 @@ Required foundation work:
 - Keep every administrative API authenticated, permission-checked, validated, rate-limited, audited, and inaccessible through player endpoints.
 - Make the CRM responsive, accessible, enterprise-focused, dark-mode capable, and entirely API-driven with no placeholder data.
 
-Sprint 4 validation must include Go tests, vet, build, TypeScript, ESLint, Vitest, Next.js production build, Playwright on desktop/tablet/mobile, permission and audit tests, and complete Sprint 1-3 regression verification.
+#### Sprint 4 Implemented Architecture
 
-Sprint 4 may be approved only when the separate CRM, all listed operational modules, security review, automated validation, and regression suites are complete. Its future freeze tag is `sprint-4-v1.0-freeze`.
+The Admin CRM is a standalone Next.js application under `admin-crm/`. It is not a route, layout, or navigation branch inside the player frontend. Production deployment exposes the CRM separately on port `3100` and proxies versioned requests to the backend through its same-origin `/gateway` boundary.
+
+The backend issues CRM-only access and refresh cookies with a dedicated JWT audience. Player tokens and player cookies are rejected by CRM middleware. Administrator sessions enforce mandatory MFA enrollment, explicit permission claims, idle expiry, refresh rotation, revocation, request rate limits, origin checks, and complete actor attribution.
+
+Roles use an explicit permission matrix rather than inherited numeric ranking:
+
+| Role | Operational scope |
+|---|---|
+| Super Administrator | All CRM permissions and administrator role management |
+| Operations | Dashboard, users, finance read, Treasury read, KYC read, support, audit, notices, and monitoring |
+| Finance / Treasury | Financial review, withdrawal decisions, Treasury, reconciliation, audit, and monitoring |
+| Compliance / Fraud | Finance read, KYC decisions, compliance policies, audit, and monitoring |
+| Support | User read and support case management only |
+| Read Only | Read-only operational, finance, compliance, support, audit, and monitoring access |
+
+The CRM exposes no direct wallet balance mutation. Financial decisions use the frozen Financial Platform state machines, Payment Core, reserve validation, ledger, and reconciliation contracts.
+
+#### Sprint 4 API
+
+All routes are versioned under `/api/v1/admin-crm`. Except for login and MFA challenge, every route requires a valid CRM access token, active administrator session, completed MFA, and the route-specific permission.
+
+| Route | Methods | Purpose |
+|---|---|---|
+| `/auth/login` | `POST` | Administrator credential verification and MFA enrollment/challenge start |
+| `/auth/mfa/challenge` | `POST` | Complete TOTP or recovery-code authentication |
+| `/auth/mfa/setup` | `POST` | Create an encrypted TOTP enrollment secret |
+| `/auth/mfa/confirm` | `POST` | Confirm TOTP and issue one-time recovery codes |
+| `/auth/session` | `GET` | Return the current administrator identity and permissions |
+| `/auth/refresh` | `POST` | Rotate the CRM refresh token and recover the session |
+| `/auth/logout` | `POST` | Revoke the current session and clear CRM cookies |
+| `/dashboard` | `GET` | Authoritative player, finance, game, support, compliance, and dependency summary |
+| `/users` | `GET` | Search and filter player records |
+| `/users/{id}` | `GET` | Full identity, security, progression, wallet, match, and compliance record |
+| `/users/{id}/status` | `POST` | Suspend, disable, lock, or reactivate an account with a reason |
+| `/users/{id}/force-logout` | `POST` | Revoke all player sessions |
+| `/users/{id}/notes` | `GET`, `POST` | Read or append internal-only notes |
+| `/users/{id}/restrictions` | `GET`, `POST`, `PATCH` | Read, apply, expire, or lift typed restrictions |
+| `/users/{id}/role` | `POST` | Super-administrator role assignment |
+| `/users/{id}/mfa/reset` | `POST` | Super-administrator MFA reset and forced logout |
+| `/finance` | `GET` | Deposits, withdrawals, providers, reconciliation, and reserve evidence |
+| `/finance/withdrawals/{id}/decision` | `POST` | Manual approval or rejection with mandatory reason |
+| `/compliance/cases` | `GET` | KYC, AML, financial assessment, evidence, provider-response, and review queue |
+| `/compliance/evidence/{id}` | `GET` | Authorized evidence retrieval from object storage |
+| `/compliance/decisions` | `POST` | Approve, reject, request information, or escalate a review |
+| `/compliance/jurisdictions` | `GET`, `PUT` | Runtime country, age, source-of-funds, and financial-limit policy |
+| `/support/tickets` | `GET` | Search the support work queue |
+| `/support/tickets/{id}` | `PATCH` | Assign, prioritize, reply, escalate, annotate, or close a ticket |
+| `/support/attachments/{id}` | `GET` | Authorized support attachment retrieval |
+| `/audit` | `GET` | Filter immutable administrator and platform audit records |
+| `/announcements` | `GET`, `POST` | Read and send audited operational notices |
+| `/monitoring` | `GET` | Read-only API, database, Redis, storage, queue, worker, email, and provider health |
+
+#### Sprint 4 Persistence And Security
+
+Migration `006_admin_crm.sql` adds administrator roles, internal notes, support messages and attachments, account and responsible-gaming restrictions, jurisdiction policies, immutable KYC/AML provider-response summaries, announcements, audit context fields, constraints, and operational indexes. PostgreSQL is authoritative in production. Support attachments and compliance evidence use the configured object-storage interface. Provider adapters record normalized identity, age, address, sanctions, PEP, AML, and source-of-funds outcomes through the provider-neutral repository boundary; raw sensitive documents remain in object storage.
+
+Audit entries form a cryptographic hash chain. Hash timestamps are normalized to PostgreSQL microsecond precision so records can be reproduced after persistence. User-restriction updates verify both restriction ID and owning user ID before mutation. Cooling-off and self-exclusion require explicit expiry, block financial operations and competition entry, and remain visible in the player record. CRM mutation handlers fail visibly if their required audit entry cannot be recorded.
+
+The CRM container runs the Next.js standalone production bundle as a non-root user. Docker Compose gives the application an independent service, port, backend dependency, and health check. No administrator screens or navigation were added to the player application.
+
+#### Sprint 4 Proof
+
+Responsive proof is generated by the real end-to-end administrator journey under `docs/proof/sprint-4-admin-crm/`. The suite registers and verifies configured administrator accounts, performs CRM login, enrolls MFA, stores recovery codes, loads every operational module from live APIs, signs out, and repeats at desktop, tablet, and mobile viewports.
+
+#### Sprint 4 Production Validation
+
+Validation date: 2026-07-25.
+
+- Backend: `gofmt` completed; `go test ./...`, `go vet ./...`, and `go build ./...` passed.
+- PostgreSQL: `TestPostgresAdminCRMRepository` passed against a fresh PostgreSQL 17 database after applying every migration. The test verifies role persistence, object-stored support evidence, jurisdiction policy, provider-response JSONB and array round trips, and audit-chain integrity.
+- Admin CRM: Vitest passed 2 files and 5 tests; ESLint passed with zero warnings; TypeScript passed; the Next.js 16.2.11 production build generated all 13 routes.
+- Admin end to end: Playwright passed the complete administrator login, MFA enrollment, recovery-code retention, operational-module, and logout journey on desktop, tablet, and mobile. Result: 3 passed.
+- Frozen-domain regression: player Vitest passed 4 files and 6 tests; ESLint, TypeScript, and the 23-route production build passed. Playwright passed 18 Sprint 1-3 journeys across desktop, tablet, and mobile.
+- Dependencies: production `npm audit` reported zero vulnerabilities for both the player platform and Admin CRM.
+- Repository integrity: 483 tracked and pending project files were scanned; no zero-byte files, NUL-corrupted text, invalid UTF-8, or duplicate migration prefixes were found. Builds verified imports and model references.
+- Isolation: no player admin route, navigation entry, approval control, Treasury dashboard, fraud tool, KYC review, or compliance operation exists in the player application.
+- Responsive proof: 30 current screenshots are stored under `docs/proof/sprint-4-admin-crm/`.
+
+Docker was unavailable in the validation environment. The standalone non-root image, independent Compose service, health check, and deployment boundary were reviewed statically; exercising the image in the target container platform remains deployment-environment verification, not missing application code.
+
+Freeze decision: **SPRINT 4 APPROVED.** The separate Admin CRM, its secured APIs, PostgreSQL persistence, object-storage evidence access, operations modules, permissions, audit controls, responsive UI, and Sprint 1-3 regressions are complete. Sprint 5 has not begun.
 
 ### Sprint 5: Session Gateway, Presence, Notifications, And Realtime Events
 
@@ -4663,7 +4743,7 @@ Final regression audit:
 - Fresh PostgreSQL 17 migration and restart persistence passed again.
 - The E2E test server uses elevated test-only login/register limits because all 15 tests share one loopback IP; production rate limits and their backend tests are unchanged.
 
-Freeze decision: **SPRINT 2 APPROVED AND FROZEN.** Sprint 3 subsequently completed and is frozen at `sprint-3-v1.0-freeze`. Sprint 4 has not begun.
+Freeze decision: **SPRINT 2 APPROVED AND FROZEN.** Sprint 3 and Sprint 4 subsequently completed under their own independent freeze tags.
 
 ### Arena Hub Owns
 
@@ -5526,17 +5606,16 @@ Payment Core passes the unmodified raw body and all headers to the selected adap
 
 | Method | Path | Role | Purpose |
 |---|---|---|---|
-| POST | `/api/v1/admin/financial/assessments/decision` | admin | Record assessment review decision |
-| POST | `/api/v1/admin/financial/payout-destinations` | admin | Link and verify an adapter-owned payout destination |
-| POST | `/api/v1/admin/financial/withdrawals/transition` | treasury_manager | Approve, reject, or start provider processing |
-| POST | `/api/v1/admin/financial/reconcile` | treasury_manager | Retrieve provider balance and record immutable reconciliation |
+| GET | `/api/v1/admin-crm/finance` | finance.read | Review deposits, withdrawals, provider health, reconciliations, and reserve checks |
+| POST | `/api/v1/admin-crm/finance/withdrawals/{id}/decision` | withdrawals.review | Approve or reject a pending withdrawal through Payment Core |
+| GET | `/api/v1/admin-crm/compliance/cases` | kyc.read | Review financial assessments, KYC/AML evidence, and provider responses |
+| POST | `/api/v1/admin-crm/compliance/decisions` | kyc.decide | Record an assessment decision and notify the player |
 
-Withdrawal transition:
+Withdrawal decision:
 
 ```json
 {
-  "withdrawalId": "withdrawal-id",
-  "status": "approved",
+  "decision": "approve",
   "reason": "Manual review complete"
 }
 ```
@@ -5629,33 +5708,10 @@ Progress body:
 |---|---|---|
 | GET | `/api/v1/replays` | Player replay list |
 | GET | `/api/v1/replays/{sessionId}` | Replay detail |
-| GET | `/api/v1/admin/replays/{sessionId}` | Admin replay detail |
 
-### Admin
+### Administrator API Isolation
 
-| Method | Path | Role | Purpose |
-|---|---|---|---|
-| GET | `/api/v1/admin/users` | admin | User list |
-| POST | `/api/v1/admin/roles/update` | super_admin | Update role |
-| POST | `/api/v1/admin/roles/suspend` | super_admin | Suspend admin |
-| POST | `/api/v1/admin/mfa/reset` | super_admin | Reset privileged MFA |
-| GET | `/api/v1/admin/audit-logs` | admin | Audit logs |
-| POST | `/api/v1/admin/kyc/approve` | admin | Approve KYC |
-| GET | `/api/v1/admin/review-cases` | admin | Review cases |
-| POST | `/api/v1/admin/review-cases/transition` | admin | Transition review case |
-| GET | `/api/v1/admin/metrics` | admin | Metrics |
-| GET | `/api/v1/admin/system-health` | admin | System health |
-| GET | `/api/v1/admin/jobs` | admin | Jobs |
-| GET | `/api/v1/admin/jobs/stats` | admin | Job queue stats |
-| POST | `/api/v1/admin/jobs/retry` | admin | Retry job |
-| POST | `/api/v1/admin/jobs/cancel` | admin | Cancel job |
-| POST | `/api/v1/admin/jobs/requeue` | admin | Requeue job |
-| GET | `/api/v1/admin/backups` | admin | Backup records |
-| POST | `/api/v1/admin/backups/restore` | super_admin | Validate backup |
-| GET | `/api/v1/admin/house-risk/{tier}` | admin | House risk |
-| GET | `/api/v1/admin/baselines` | admin | Behavioral baselines |
-| POST | `/api/v1/admin/tournaments/bracket` | admin | Generate bracket |
-| POST | `/api/v1/admin/tournaments/result` | admin | Report tournament result |
+The legacy player-audience `/api/v1/admin/*` routes are retired and return `404`. All reachable administrator operations are listed in the Sprint 4 API section and use the `/api/v1/admin-crm/*` namespace, CRM-only cookies and JWT audience, mandatory MFA, active privileged sessions, explicit permissions, and audit attribution.
 
 ---
 

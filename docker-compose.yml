@@ -73,6 +73,7 @@ services:
       SKILL_ARENA_PUZZLE_SECRET: ${SKILL_ARENA_PUZZLE_SECRET:?SKILL_ARENA_PUZZLE_SECRET is required}
       SKILL_ARENA_COOKIE_SECURE: "true"
       SKILL_ARENA_PUBLIC_BASE_URL: ${SKILL_ARENA_PUBLIC_BASE_URL:?SKILL_ARENA_PUBLIC_BASE_URL is required}
+      SKILL_ARENA_ADMIN_BASE_URL: ${SKILL_ARENA_ADMIN_BASE_URL:?SKILL_ARENA_ADMIN_BASE_URL is required}
       SKILL_ARENA_ALLOWED_ORIGINS: ${SKILL_ARENA_ALLOWED_ORIGINS:?SKILL_ARENA_ALLOWED_ORIGINS is required}
       SKILL_ARENA_EMAIL_OUTBOX_ONLY: "false"
       SKILL_ARENA_SMTP_HOST: ${SKILL_ARENA_SMTP_HOST:?SKILL_ARENA_SMTP_HOST is required}
@@ -123,6 +124,26 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+  admin-crm:
+    build:
+      context: ./admin-crm
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3100
+      SKILL_ARENA_API_INTERNAL_URL: http://backend:8080
+    ports:
+      - "3100:3100"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 volumes:
   postgres-data:

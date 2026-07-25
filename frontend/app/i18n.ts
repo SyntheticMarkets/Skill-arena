@@ -10,7 +10,6 @@ export const t = {
   navReplays: 'Replays',
   navProfile: 'Profile',
   navSettings: 'Settings',
-  navAdmin: 'Admin',
   navLogin: 'Login',
   navRegister: 'Register',
   topbarSeason: 'Season 1',

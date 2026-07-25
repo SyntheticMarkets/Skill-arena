@@ -148,14 +148,27 @@ type HubSnapshot struct {
 }
 
 type SupportTicket struct {
-	ID        string    `json:"id"`
-	UserID    string    `json:"-"`
-	Category  string    `json:"category"`
-	Subject   string    `json:"subject"`
-	Message   string    `json:"message"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID          string              `json:"id"`
+	UserID      string              `json:"-"`
+	Category    string              `json:"category"`
+	Subject     string              `json:"subject"`
+	Message     string              `json:"message"`
+	Status      string              `json:"status"`
+	CreatedAt   time.Time           `json:"createdAt"`
+	UpdatedAt   time.Time           `json:"updatedAt"`
+	Attachments []SupportAttachment `json:"attachments"`
+}
+
+type SupportAttachment struct {
+	ID          string    `json:"id"`
+	TicketID    string    `json:"ticketId"`
+	UserID      string    `json:"-"`
+	ObjectKey   string    `json:"-"`
+	FileName    string    `json:"fileName"`
+	ContentType string    `json:"contentType"`
+	SizeBytes   int64     `json:"sizeBytes"`
+	SHA256      string    `json:"sha256"`
+	CreatedAt   time.Time `json:"createdAt"`
 }
 
 type SupportArticle struct {

@@ -203,7 +203,7 @@ func TestReadinessFailsWhenConfiguredProviderIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestPlayerCannotAccessFinancialAdministration(t *testing.T) {
+func TestLegacyPlayerAudienceFinancialAdministrationIsRetired(t *testing.T) {
 	store, err := db.New(context.Background(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +222,7 @@ func TestPlayerCannotAccessFinancialAdministration(t *testing.T) {
 		"/api/v1/admin/financial/reconcile",
 	} {
 		response := authRequest(t, handler, http.MethodPost, path, map[string]string{}, []*http.Cookie{access})
-		if response.Code != http.StatusForbidden {
+		if response.Code != http.StatusNotFound {
 			t.Fatalf("player access to %s returned %d body=%s", path, response.Code, response.Body.String())
 		}
 	}

@@ -297,7 +297,8 @@ func nullableString(value string) any {
 
 func auditHash(previous, id, actorID, action, targetID, ipAddress string, metadata map[string]string, createdAt time.Time) string {
 	data, _ := json.Marshal(metadata)
-	sum := sha256.Sum256([]byte(strings.Join([]string{previous, id, actorID, action, targetID, ipAddress, createdAt.UTC().Format(time.RFC3339Nano), string(data)}, "\x00")))
+	storedTimestamp := createdAt.UTC().Truncate(time.Microsecond)
+	sum := sha256.Sum256([]byte(strings.Join([]string{previous, id, actorID, action, targetID, ipAddress, storedTimestamp.Format(time.RFC3339Nano), string(data)}, "\x00")))
 	return hex.EncodeToString(sum[:])
 }
 

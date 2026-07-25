@@ -11,3 +11,8 @@ var FinancialPlatform string
 //
 //go:embed 005_financial_completion.sql
 var FinancialCompletion string
+
+// AdminCRM is the normalized Sprint 4 operations and compliance schema.
+//
+//go:embed 006_admin_crm.sql
+var AdminCRM string

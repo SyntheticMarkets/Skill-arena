@@ -83,6 +83,82 @@ FROM financial_evidence WHERE user_id=$1 ORDER BY created_at DESC`, userID)
 	return items, nil
 }
 
+func (s *Store) GetFinancialEvidenceForReview(ctx context.Context, evidenceID string) (*models.FinancialEvidence, []byte, error) {
+	var item models.FinancialEvidence
+	if s.usesPostgresAuth() {
+		err := s.pg.QueryRowContext(ctx, `
+SELECT id,user_id,evidence_type,object_key,content_type,size_bytes,sha256,status,created_at
+FROM financial_evidence WHERE id=$1`, evidenceID).Scan(
+			&item.ID, &item.UserID, &item.Type, &item.ObjectKey, &item.ContentType,
+			&item.SizeBytes, &item.SHA256, &item.Status, &item.CreatedAt)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		s.mu.RLock()
+		stored := s.financialEvidence[evidenceID]
+		if stored != nil {
+			item = *stored
+		}
+		s.mu.RUnlock()
+		if item.ID == "" {
+			return nil, nil, errors.New("financial evidence not found")
+		}
+	}
+	data, err := s.objects.Get(ctx, item.ObjectKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	digest := sha256.Sum256(data)
+	if hex.EncodeToString(digest[:]) != item.SHA256 {
+		return nil, nil, errors.New("financial evidence integrity check failed")
+	}
+	return &item, data, nil
+}
+
+func (s *Store) SetFinancialEvidenceStatus(ctx context.Context, userID, status string) error {
+	status = strings.ToLower(strings.TrimSpace(status))
+	valid := map[string]bool{"received": true, "verified": true, "rejected": true, "more_information": true}
+	if !valid[status] {
+		return errors.New("financial evidence status is invalid")
+	}
+	if s.usesPostgresAuth() {
+		_, err := s.pg.ExecContext(ctx, `UPDATE financial_evidence SET status=$1 WHERE user_id=$2`, status, userID)
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range s.financialEvidence {
+		if item.UserID == userID {
+			item.Status = status
+		}
+	}
+	return nil
+}
+
+func (s *Store) SetUserKYCStatus(ctx context.Context, userID, status string) error {
+	status = strings.ToLower(strings.TrimSpace(status))
+	if status != "pending" && status != "approved" && status != "rejected" && status != "more_information" {
+		return errors.New("KYC status is invalid")
+	}
+	if s.usesPostgresAuth() {
+		result, err := s.pg.ExecContext(ctx, `UPDATE users SET kyc_status=$1,updated_at=$2 WHERE id=$3`, status, time.Now().UTC(), userID)
+		if err != nil {
+			return err
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			return errors.New("user not found")
+		}
+	}
+	s.mu.Lock()
+	if user := s.users[userID]; user != nil {
+		user.KYCStatus = status
+		user.UpdatedAt = time.Now().UTC()
+	}
+	s.mu.Unlock()
+	return nil
+}
+
 func (s *Store) StoreFinancialArtifact(ctx context.Context, userID, artifactType, contentType string, data []byte) (*models.FinancialArtifact, error) {
 	artifactType = strings.ToLower(strings.TrimSpace(artifactType))
 	if !validArtifactType(artifactType) || len(data) == 0 {

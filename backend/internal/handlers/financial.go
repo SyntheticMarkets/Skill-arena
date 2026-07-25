@@ -99,7 +99,7 @@ func (h *FinancialHandlers) Overview(w http.ResponseWriter, r *http.Request) {
 		country = h.settings.Financial.DefaultCountry
 	}
 	allowedMethods := []string{"card", "eft", "bank_transfer"}
-	if policy, ok := h.settings.Financial.Policy(country); ok {
+	if policy, _, ok, err := h.effectiveFinancialPolicy(r.Context(), country); err == nil && ok {
 		allowedMethods = policy.PaymentMethods
 	}
 	methods := h.payments.Methods(r.Context(), country, wallet.Currency, allowedMethods)
@@ -312,7 +312,11 @@ func (h *FinancialHandlers) Assessment(w http.ResponseWriter, r *http.Request) {
 		WriteAPIError(w, http.StatusBadRequest, "INVALID_ASSESSMENT", err.Error())
 		return
 	}
-	policy, supported := h.settings.Financial.Policy(request.Country)
+	policy, _, supported, policyErr := h.effectiveFinancialPolicy(r.Context(), request.Country)
+	if policyErr != nil {
+		WriteMappedError(w, http.StatusInternalServerError, policyErr)
+		return
+	}
 	if !supported || !validOccupation(request.Occupation) || (policy.SourceOfFundsRequired && !validSourceOfFunds(request.SourceOfFunds)) {
 		WriteAPIError(w, http.StatusBadRequest, "INVALID_ASSESSMENT", "Select a supported country, occupation, and source of funds.")
 		return
@@ -893,9 +897,27 @@ func (h *FinancialHandlers) validateFinancialIntent(r *http.Request, userID stri
 	if assessment.Status != models.AssessmentStatusComplete || assessment.ResponsibleStatus != "active" {
 		return errors.New("financial assessment and responsible gaming checks must be complete")
 	}
-	policy, supported := h.settings.Financial.Policy(assessment.Country)
+	policy, runtimePolicy, supported, err := h.effectiveFinancialPolicy(r.Context(), assessment.Country)
+	if err != nil {
+		return err
+	}
 	if !supported || strings.ToUpper(request.Currency) != policy.Currency || !containsString(policy.PaymentMethods, request.Method) {
 		return errors.New("currency or payment method is not enabled for this jurisdiction")
+	}
+	if (!withdrawal && !runtimePolicy.DepositEnabled) || (withdrawal && !runtimePolicy.WithdrawalEnabled) {
+		return errors.New("this financial operation is disabled for the jurisdiction")
+	}
+	restrictionTypes := []string{"account", "deposit"}
+	if withdrawal {
+		restrictionTypes = []string{"account", "withdrawal"}
+	}
+	restrictionTypes = append(restrictionTypes, "cooling_off", "self_exclusion")
+	restricted, err := h.store.HasActiveCRMRestriction(r.Context(), userID, restrictionTypes...)
+	if err != nil {
+		return err
+	}
+	if restricted {
+		return errors.New("this financial operation is restricted pending compliance review")
 	}
 	limits, err := h.store.GetFinancialLimits(r.Context(), userID)
 	if err != nil {
@@ -918,6 +940,38 @@ func (h *FinancialHandlers) validateFinancialIntent(r *http.Request, userID stri
 		return errors.New("deposit limit reached")
 	}
 	return nil
+}
+
+func (h *FinancialHandlers) effectiveFinancialPolicy(ctx context.Context, country string) (config.JurisdictionFinancialPolicy, models.CRMJurisdictionPolicy, bool, error) {
+	configured, ok := h.settings.Financial.Policy(country)
+	runtime := models.CRMJurisdictionPolicy{
+		Country:  strings.ToUpper(strings.TrimSpace(country)),
+		Currency: configured.Currency, MinimumAge: configured.MinimumAge,
+		DepositEnabled: true, WithdrawalEnabled: true,
+		SourceOfFundsRequired:  configured.SourceOfFundsRequired,
+		DailyDepositMinor:      models.MinorUnits(configured.DailyDepositMinor),
+		MonthlyDepositMinor:    models.MinorUnits(configured.MonthlyDepositMinor),
+		DailyWithdrawalMinor:   models.MinorUnits(configured.DailyWithdrawalMinor),
+		MonthlyWithdrawalMinor: models.MinorUnits(configured.MonthlyWithdrawalMinor),
+	}
+	override, err := h.store.GetCRMJurisdiction(ctx, country)
+	if err != nil {
+		return config.JurisdictionFinancialPolicy{}, models.CRMJurisdictionPolicy{}, false, err
+	}
+	if override == nil {
+		return configured, runtime, ok, nil
+	}
+	if !ok {
+		configured.PaymentMethods = []string{"card", "eft", "bank_transfer"}
+	}
+	configured.Currency = override.Currency
+	configured.MinimumAge = override.MinimumAge
+	configured.SourceOfFundsRequired = override.SourceOfFundsRequired
+	configured.DailyDepositMinor = int64(override.DailyDepositMinor)
+	configured.MonthlyDepositMinor = int64(override.MonthlyDepositMinor)
+	configured.DailyWithdrawalMinor = int64(override.DailyWithdrawalMinor)
+	configured.MonthlyWithdrawalMinor = int64(override.MonthlyWithdrawalMinor)
+	return configured, *override, true, nil
 }
 
 func (h *FinancialHandlers) withdrawalPolicyReasons(r *http.Request, userID string, request financialIntentRequest) ([]string, error) {

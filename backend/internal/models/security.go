@@ -6,6 +6,7 @@ const (
 	AuthTokenPurposeEmailVerification = "email_verification"
 	AuthTokenPurposePasswordReset     = "password_reset"
 	AuthTokenPurposeMFAChallenge      = "mfa_challenge"
+	AuthTokenPurposeAdminMFAChallenge = "admin_mfa_challenge"
 )
 
 type AuthSession struct {

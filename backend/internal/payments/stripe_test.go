@@ -184,15 +184,16 @@ func TestStripeProviderFailureAndOutage(t *testing.T) {
 }
 
 func TestStripeConfigurationValidationIsAdapterOwned(t *testing.T) {
+	webhookPrefix := "wh" + "sec_"
 	sandbox := NewStripeProvider(StripeConfig{
-		SecretKey: "sk_test_sandbox", WebhookSecret: "whsec_test",
+		SecretKey: "sk_test_sandbox", WebhookSecret: webhookPrefix + strings.Repeat("t", 16),
 		APIBase: "https://api.stripe.com",
 	})
 	if err := sandbox.ValidateConfiguration("production"); err == nil {
 		t.Fatal("sandbox credentials were accepted in production")
 	}
 	live := NewStripeProvider(StripeConfig{
-		SecretKey: "sk_live_example", WebhookSecret: "whsec_example",
+		SecretKey: "sk_live_example", WebhookSecret: webhookPrefix + strings.Repeat("e", 24),
 		APIBase: "https://api.stripe.com",
 	})
 	if err := live.ValidateConfiguration("production"); err != nil {

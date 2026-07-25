@@ -147,7 +147,13 @@ type CacheSettings struct {
 }
 
 type AdminSettings struct {
-	SuperAdminEmails []string
+	SuperAdminEmails  []string
+	BaseURL           string
+	AccessCookieName  string
+	RefreshCookieName string
+	AccessTTL         time.Duration
+	RefreshTTL        time.Duration
+	IdleTimeout       time.Duration
 }
 
 type MaintenanceSettings struct {
@@ -339,6 +345,12 @@ func LoadRuntimeSettings() *RuntimeSettings {
 				"geldenhuysj0106@gmail.com",
 				"skillarenagame@gmail.com",
 			}),
+			BaseURL:           envString("SKILL_ARENA_ADMIN_BASE_URL", "http://localhost:3100"),
+			AccessCookieName:  envString("SKILL_ARENA_ADMIN_ACCESS_COOKIE", "sa_admin_access"),
+			RefreshCookieName: envString("SKILL_ARENA_ADMIN_REFRESH_COOKIE", "sa_admin_refresh"),
+			AccessTTL:         time.Duration(envInt("SKILL_ARENA_ADMIN_ACCESS_TTL_MINUTES", 10)) * time.Minute,
+			RefreshTTL:        time.Duration(envInt("SKILL_ARENA_ADMIN_REFRESH_TTL_HOURS", 8)) * time.Hour,
+			IdleTimeout:       time.Duration(envInt("SKILL_ARENA_ADMIN_IDLE_TIMEOUT_MINUTES", 30)) * time.Minute,
 		},
 		Maintenance: MaintenanceSettings{
 			Enabled:          envBool("SKILL_ARENA_MAINTENANCE_ENABLED", false),
@@ -413,6 +425,19 @@ func validateProduction(cfg *Config) error {
 	publicURL, err := url.Parse(cfg.Settings.Email.BaseURL)
 	if err != nil || publicURL.Scheme != "https" || publicURL.Host == "" {
 		return errors.New("production SKILL_ARENA_PUBLIC_BASE_URL must be an absolute HTTPS URL")
+	}
+	adminURL, err := url.Parse(cfg.Settings.Admin.BaseURL)
+	if err != nil || adminURL.Scheme != "https" || adminURL.Host == "" {
+		return errors.New("production SKILL_ARENA_ADMIN_BASE_URL must be an absolute HTTPS URL")
+	}
+	if cfg.Settings.Admin.AccessCookieName == cfg.Settings.Security.AccessCookieName ||
+		cfg.Settings.Admin.RefreshCookieName == cfg.Settings.Security.RefreshCookieName {
+		return errors.New("production Admin CRM cookies must be distinct from player cookies")
+	}
+	if cfg.Settings.Admin.AccessTTL <= 0 || cfg.Settings.Admin.AccessTTL > 15*time.Minute ||
+		cfg.Settings.Admin.RefreshTTL <= 0 || cfg.Settings.Admin.RefreshTTL > 24*time.Hour ||
+		cfg.Settings.Admin.IdleTimeout <= 0 || cfg.Settings.Admin.IdleTimeout > time.Hour {
+		return errors.New("production Admin CRM session lifetimes exceed the privileged-session policy")
 	}
 	if cfg.Settings.Email.OutboxOnly {
 		return errors.New("production requires SKILL_ARENA_EMAIL_OUTBOX_ONLY=false")

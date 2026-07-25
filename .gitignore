@@ -31,11 +31,17 @@ artifacts/
 backend/data/
 backend/backups/
 backend/.e2e-data/
+backend/.admin-e2e-data/
 backend/.review-data/
 frontend/test-results/
 frontend/playwright-report/
 frontend/coverage/
 frontend/tsconfig.tsbuildinfo
+admin-crm/.next/
+admin-crm/test-results/
+admin-crm/playwright-report/
+admin-crm/coverage/
+admin-crm/tsconfig.tsbuildinfo
 
 # Extracted reference app checkout; the zip remains versioned.
 sample app/stray-arrows/

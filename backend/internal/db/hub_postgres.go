@@ -752,7 +752,14 @@ FROM support_tickets WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 100`, userI
 			}
 			tickets = append(tickets, ticket)
 		}
-		return tickets, rows.Err()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		rows.Close()
+		for index := range tickets {
+			tickets[index].Attachments, _ = s.ListSupportAttachments(ctx, tickets[index].ID)
+		}
+		return tickets, nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()

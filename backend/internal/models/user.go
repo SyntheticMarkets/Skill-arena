@@ -9,6 +9,10 @@ const (
 	RoleFraudAnalyst    = "fraud_analyst"
 	RoleSupport         = "support"
 	RoleModerator       = "moderator"
+	RoleCompliance      = "compliance"
+	RoleFinance         = "finance"
+	RoleOperations      = "operations"
+	RoleReadOnly        = "read_only"
 	RolePlayer          = "player"
 )
 

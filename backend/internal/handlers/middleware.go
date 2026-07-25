@@ -40,18 +40,21 @@ func newMemoryRateLimiter() *memoryRateLimiter {
 	return &memoryRateLimiter{
 		events: map[string][]time.Time{},
 		limiter: map[string]rateLimitRule{
-			"/api/v1/auth/login":                  {Limit: settings.LoginLimit, Window: settings.DefaultWindow},
-			"/api/v1/auth/register":               {Limit: settings.RegisterLimit, Window: settings.DefaultWindow},
-			"/api/v1/auth/resend-verification":    {Limit: settings.RegisterLimit, Window: settings.DefaultWindow},
-			"/api/v1/auth/password-reset/request": {Limit: settings.RegisterLimit, Window: settings.DefaultWindow},
-			"/api/v1/auth/password-reset/confirm": {Limit: settings.LoginLimit, Window: settings.DefaultWindow},
-			"/api/v1/auth/mfa/confirm":            {Limit: settings.LoginLimit, Window: settings.DefaultWindow},
-			"/api/v1/auth/mfa/challenge":          {Limit: settings.LoginLimit, Window: settings.DefaultWindow},
-			"/api/v1/pvp/join":                    {Limit: settings.MatchCreationLimit, Window: settings.DefaultWindow},
-			"/api/v1/games/start":                 {Limit: settings.MatchCreationLimit, Window: settings.DefaultWindow},
-			"/api/v1/replays":                     {Limit: settings.ReplayLimit, Window: settings.DefaultWindow},
-			"/api/v1/wallet/withdraw":             {Limit: settings.WithdrawalLimit, Window: settings.DefaultWindow},
-			"default":                             {Limit: settings.DefaultLimit, Window: settings.DefaultWindow},
+			"/api/v1/auth/login":                   {Limit: settings.LoginLimit, Window: settings.DefaultWindow},
+			"/api/v1/auth/register":                {Limit: settings.RegisterLimit, Window: settings.DefaultWindow},
+			"/api/v1/auth/resend-verification":     {Limit: settings.RegisterLimit, Window: settings.DefaultWindow},
+			"/api/v1/auth/password-reset/request":  {Limit: settings.RegisterLimit, Window: settings.DefaultWindow},
+			"/api/v1/auth/password-reset/confirm":  {Limit: settings.LoginLimit, Window: settings.DefaultWindow},
+			"/api/v1/auth/mfa/confirm":             {Limit: settings.LoginLimit, Window: settings.DefaultWindow},
+			"/api/v1/auth/mfa/challenge":           {Limit: settings.LoginLimit, Window: settings.DefaultWindow},
+			"/api/v1/admin-crm/auth/login":         {Limit: settings.LoginLimit, Window: settings.DefaultWindow},
+			"/api/v1/admin-crm/auth/mfa/challenge": {Limit: settings.LoginLimit, Window: settings.DefaultWindow},
+			"/api/v1/admin-crm/auth/refresh":       {Limit: settings.LoginLimit, Window: settings.DefaultWindow},
+			"/api/v1/pvp/join":                     {Limit: settings.MatchCreationLimit, Window: settings.DefaultWindow},
+			"/api/v1/games/start":                  {Limit: settings.MatchCreationLimit, Window: settings.DefaultWindow},
+			"/api/v1/replays":                      {Limit: settings.ReplayLimit, Window: settings.DefaultWindow},
+			"/api/v1/wallet/withdraw":              {Limit: settings.WithdrawalLimit, Window: settings.DefaultWindow},
+			"default":                              {Limit: settings.DefaultLimit, Window: settings.DefaultWindow},
 		},
 	}
 }
@@ -155,6 +158,21 @@ func MaintenanceMiddleware(cfg *config.Config, next http.Handler) http.Handler {
 	})
 }
 
+func ComplianceRestrictionMiddleware(store *db.Store, restrictionTypes []string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		restricted, err := store.HasActiveCRMRestriction(r.Context(), UserIDFromContext(r.Context()), restrictionTypes...)
+		if err != nil {
+			WriteAPIError(w, http.StatusServiceUnavailable, "POLICY_CHECK_UNAVAILABLE", "Compliance policy could not be evaluated.")
+			return
+		}
+		if restricted {
+			WriteAPIError(w, http.StatusForbidden, ErrForbidden, "This action is restricted pending compliance review.")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func AuthMiddleware(store *db.Store, cfg *config.Config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tokenValue := r.Header.Get("Authorization")
@@ -226,6 +244,73 @@ func AuthMiddleware(store *db.Store, cfg *config.Config, next http.Handler) http
 	})
 }
 
+func AdminCRMAuthMiddleware(store *db.Store, cfg *config.Config, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenValue := ""
+		if cookie, err := r.Cookie(cfg.Settings.Admin.AccessCookieName); err == nil {
+			tokenValue = cookie.Value
+		}
+		if tokenValue == "" {
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "administrator authentication is required")
+			return
+		}
+		claims := jwt.MapClaims{}
+		token, err := jwt.ParseWithClaims(tokenValue, claims, func(token *jwt.Token) (interface{}, error) {
+			if token.Method != jwt.SigningMethodHS256 {
+				return nil, errors.New("unexpected signing method")
+			}
+			return []byte(cfg.JWTSecret), nil
+		})
+		if err != nil || !token.Valid || claims["typ"] != "access" ||
+			claims["iss"] != "skill-arena-api" || claims["aud"] != adminAudience {
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "invalid administrator token")
+			return
+		}
+		userID, userOK := claims["sub"].(string)
+		sessionID, sessionOK := claims["sid"].(string)
+		if !userOK || !sessionOK || userID == "" || sessionID == "" {
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "invalid administrator session")
+			return
+		}
+		session, user, err := store.ValidateAuthSession(r.Context(), sessionID, userID)
+		if err != nil || !models.IsAdministratorRole(user.Role) {
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "administrator session is expired or revoked")
+			return
+		}
+		if _, active, err := store.Redis().Get(r.Context(), "admin:session:active:"+sessionID); err != nil || !active {
+			_ = store.RevokeAuthSession(r.Context(), sessionID, userID, userID, clientIP(r), "admin_idle_timeout")
+			clearAdminCookies(w, cfg)
+			WriteAPIError(w, http.StatusUnauthorized, ErrUnauthorized, "administrator session expired due to inactivity")
+			return
+		}
+		if err := store.Redis().Set(r.Context(), "admin:session:active:"+sessionID, "1", cfg.Settings.Admin.IdleTimeout); err != nil {
+			WriteAPIError(w, http.StatusServiceUnavailable, ErrInternal, "administrator session service is unavailable")
+			return
+		}
+		if !session.MFAVerified && !session.EnrollmentOnly {
+			WriteAPIError(w, http.StatusForbidden, ErrMFARequired, "administrator MFA verification is required")
+			return
+		}
+		if session.EnrollmentOnly {
+			allowed := r.URL.Path == "/api/v1/admin-crm/auth/mfa/setup" ||
+				r.URL.Path == "/api/v1/admin-crm/auth/mfa/confirm" ||
+				r.URL.Path == "/api/v1/admin-crm/auth/session" ||
+				r.URL.Path == "/api/v1/admin-crm/auth/logout"
+			if !allowed {
+				WriteAPIError(w, http.StatusForbidden, ErrMFARequired, "MFA enrollment is required before administrator access")
+				return
+			}
+		}
+		ctx := context.WithValue(r.Context(), userIDKey, userID)
+		ctx = context.WithValue(ctx, userRoleKey, user.Role)
+		ctx = context.WithValue(ctx, sessionIDKey, session.ID)
+		if session.EnrollmentOnly {
+			ctx = context.WithValue(ctx, mfaEnrollmentOnlyKey, true)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 func SessionIDFromContext(ctx context.Context) string {
 	if v, ok := ctx.Value(sessionIDKey).(string); ok {
 		return v
@@ -261,6 +346,20 @@ func RequireRole(role string, next http.Handler) http.Handler {
 		actual := UserRoleFromContext(r.Context())
 		if actual != models.RoleSuperAdmin && actual != role {
 			WriteAPIError(w, http.StatusForbidden, ErrForbidden, "insufficient permissions")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func RequirePermission(permission string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if MFAEnrollmentOnlyFromContext(r.Context()) {
+			WriteAPIError(w, http.StatusForbidden, ErrMFARequired, "MFA enrollment is required before administrator access")
+			return
+		}
+		if !models.HasAdminPermission(UserRoleFromContext(r.Context()), permission) {
+			WriteAPIError(w, http.StatusForbidden, ErrForbidden, "administrator permission is required")
 			return
 		}
 		next.ServeHTTP(w, r)
