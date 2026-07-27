@@ -94,6 +94,12 @@ type Store struct {
 	crmProviderResponses map[string][]models.CRMComplianceProviderResponse
 	crmJurisdictions     map[string]*models.CRMJurisdictionPolicy
 	crmAnnouncements     map[string]*models.CRMAnnouncement
+	realtimeMatches      map[string]*models.RealtimeMatch
+	realtimeQueue        map[string]*models.RealtimeQueueEntry
+	realtimePresence     map[string]*models.PresenceRecord
+	realtimeEvents       map[string][]models.RealtimeEvent
+	realtimeSnapshots    map[string][]models.RealtimeSnapshot
+	realtimeReplays      map[string]*models.RealtimeReplay
 	dataDir              string
 	persistence          string
 	pg                   *sql.DB
@@ -275,6 +281,12 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 		crmProviderResponses: map[string][]models.CRMComplianceProviderResponse{},
 		crmJurisdictions:     map[string]*models.CRMJurisdictionPolicy{},
 		crmAnnouncements:     map[string]*models.CRMAnnouncement{},
+		realtimeMatches:      map[string]*models.RealtimeMatch{},
+		realtimeQueue:        map[string]*models.RealtimeQueueEntry{},
+		realtimePresence:     map[string]*models.PresenceRecord{},
+		realtimeEvents:       map[string][]models.RealtimeEvent{},
+		realtimeSnapshots:    map[string][]models.RealtimeSnapshot{},
+		realtimeReplays:      map[string]*models.RealtimeReplay{},
 		dataDir:              dataDir,
 		persistence:          persistence,
 		redis:                redisClient,
@@ -806,7 +818,10 @@ CREATE INDEX IF NOT EXISTS idx_financial_idempotency_user_operation ON financial
 	if err := s.initPostgresFinancial(ctx); err != nil {
 		return err
 	}
-	return s.initPostgresAdminCRM(ctx)
+	if err := s.initPostgresAdminCRM(ctx); err != nil {
+		return err
+	}
+	return s.initPostgresRealtime(ctx)
 }
 
 func (s *Store) loadPostgresSnapshot(ctx context.Context) (bool, error) {
@@ -4277,6 +4292,12 @@ func (s *Store) ConfigureRuntime(settings *config.RuntimeSettings) {
 	s.mu.Unlock()
 }
 
+func (s *Store) RuntimeSettings() *config.RuntimeSettings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.settings
+}
+
 func (s *Store) Redis() saredis.Client {
 	return s.redis
 }
@@ -4565,14 +4586,14 @@ func (s *Store) ListJobs(ctx context.Context, status string) ([]*models.Backgrou
 }
 
 func (s *Store) ClaimNextJob(ctx context.Context, worker string, jobTypes []string, now time.Time) (*models.BackgroundJob, error) {
-	locked, err := s.redis.Lock(ctx, "jobs:claim", 15*time.Second)
+	lockToken, locked, err := s.redis.Lock(ctx, "jobs:claim", 15*time.Second)
 	if err != nil {
 		return nil, err
 	}
 	if !locked {
 		return nil, nil
 	}
-	defer s.redis.Unlock(ctx, "jobs:claim")
+	defer s.redis.Unlock(ctx, "jobs:claim", lockToken)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -6063,14 +6084,14 @@ func (s *Store) JoinPvPQueue(ctx context.Context, userID, queueType, walletType 
 	request := matchmaking.JoinRequest{UserID: userID, QueueType: queueType, WalletType: walletType, Stake: stake, Now: now}
 	_ = s.redis.Set(ctx, "presence:"+userID, "online", 5*time.Minute)
 	lockKey := fmt.Sprintf("matchmaking:%s:%s:%.2f", queueType, walletType, stake)
-	locked, err := s.redis.Lock(ctx, lockKey, 15*time.Second)
+	lockToken, locked, err := s.redis.Lock(ctx, lockKey, 15*time.Second)
 	if err != nil {
 		return nil, err
 	}
 	if !locked {
 		return nil, errors.New("matchmaking queue is busy, retry shortly")
 	}
-	defer s.redis.Unlock(ctx, lockKey)
+	defer s.redis.Unlock(ctx, lockKey, lockToken)
 
 	s.mu.Lock()
 	if _, ok := s.users[userID]; !ok {

@@ -591,6 +591,7 @@ func (h *AdminCRMHandlers) Monitoring(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	queue, _ := h.store.QueueStats(r.Context())
+	realtimeMetrics, realtimeErr := h.store.RealtimeMetrics(r.Context())
 	dependencies := map[string]string{}
 	alerts := []string{}
 	check := func(name string, health func(context.Context) error) {
@@ -610,8 +611,11 @@ func (h *AdminCRMHandlers) Monitoring(w http.ResponseWriter, r *http.Request) {
 	check("storage", h.store.ObjectStorageHealth)
 	check("paymentProviders", h.payments.Health)
 	check("email", h.email.Health)
+	if realtimeErr != nil {
+		alerts = append(alerts, "realtime: "+realtimeErr.Error())
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"system": system, "queue": queue, "dependencies": dependencies, "alerts": alerts, "readOnly": true,
+		"system": system, "queue": queue, "realtime": realtimeMetrics, "dependencies": dependencies, "alerts": alerts, "readOnly": true,
 	})
 }
 

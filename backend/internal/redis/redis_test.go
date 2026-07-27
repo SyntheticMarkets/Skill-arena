@@ -31,3 +31,23 @@ func TestMemoryRateLimitIsAtomic(t *testing.T) {
 		t.Fatalf("allowed=%d, want 12", got)
 	}
 }
+
+func TestMemoryLockRequiresOwnerToken(t *testing.T) {
+	client := NewMemoryClient()
+	token, acquired, err := client.Lock(context.Background(), "matchmaking", time.Minute)
+	if err != nil || !acquired || token == "" {
+		t.Fatalf("lock token=%q acquired=%v err=%v", token, acquired, err)
+	}
+	if err := client.Unlock(context.Background(), "matchmaking", "wrong-token"); err == nil {
+		t.Fatal("non-owner unlocked distributed lock")
+	}
+	if _, acquired, err := client.Lock(context.Background(), "matchmaking", time.Minute); err != nil || acquired {
+		t.Fatalf("lock changed owner after rejected unlock: acquired=%v err=%v", acquired, err)
+	}
+	if err := client.Unlock(context.Background(), "matchmaking", token); err != nil {
+		t.Fatal(err)
+	}
+	if _, acquired, err := client.Lock(context.Background(), "matchmaking", time.Minute); err != nil || !acquired {
+		t.Fatalf("released lock was not acquirable: acquired=%v err=%v", acquired, err)
+	}
+}

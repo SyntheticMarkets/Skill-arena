@@ -12,6 +12,7 @@ import (
 	"skill-arena/internal/email"
 	"skill-arena/internal/handlers"
 	"skill-arena/internal/models"
+	"skill-arena/internal/realtime"
 )
 
 type Server struct {
@@ -23,6 +24,8 @@ func New(store *db.Store, cfg *config.Config) *Server {
 	router := http.NewServeMux()
 	financial := handlers.NewFinancialHandlers(store, cfg.Settings)
 	crm := handlers.NewAdminCRMHandlers(store, cfg.Settings)
+	realtimeHandlers := handlers.NewRealtimeHandlers(store)
+	realtimeGateway := realtime.NewGateway(store, realtimeHandlers.Service(), cfg)
 	router.Handle("/health", healthHandler(store, cfg, financial))
 	router.HandleFunc("/health/live", liveHandler)
 	router.Handle("/health/ready", healthHandler(store, cfg, financial))
@@ -72,6 +75,16 @@ func New(store *db.Store, cfg *config.Config) *Server {
 	router.Handle("/api/v1/admin-crm/audit", handlers.AdminCRMAuthMiddleware(store, cfg, handlers.RequirePermission(models.PermissionAuditRead, http.HandlerFunc(crm.Audit))))
 	router.Handle("/api/v1/admin-crm/announcements", handlers.AdminCRMAuthMiddleware(store, cfg, handlers.RequirePermission(models.PermissionNotificationsSend, http.HandlerFunc(crm.Announcements))))
 	router.Handle("/api/v1/admin-crm/monitoring", handlers.AdminCRMAuthMiddleware(store, cfg, handlers.RequirePermission(models.PermissionMonitoringRead, http.HandlerFunc(crm.Monitoring))))
+	realtimeAccess := func(next http.Handler) http.Handler {
+		return handlers.AuthMiddleware(store, cfg, handlers.ComplianceRestrictionMiddleware(store, []string{"account", "competition", "cooling_off", "self_exclusion"}, next))
+	}
+	router.Handle("/api/v1/realtime/queue", realtimeAccess(http.HandlerFunc(realtimeHandlers.Queue)))
+	router.Handle("/api/v1/realtime/matches/", realtimeAccess(http.HandlerFunc(realtimeHandlers.Matches)))
+	router.Handle("/api/v1/realtime/events/", realtimeAccess(http.HandlerFunc(realtimeHandlers.Events)))
+	router.Handle("/api/v1/realtime/replays/", realtimeAccess(http.HandlerFunc(realtimeHandlers.Replay)))
+	router.Handle("/api/v1/realtime/gateway", handlers.AuthMiddleware(store, cfg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		realtimeGateway.ServeAuthenticated(w, r, handlers.UserIDFromContext(r.Context()), handlers.SessionIDFromContext(r.Context()))
+	})))
 	router.Handle("/api/v1/identity/kyc-submit", handlers.AuthMiddleware(store, cfg, handlers.KYCSubmitHandler(store)))
 	router.Handle("/api/v1/identity/kyc-status", handlers.AuthMiddleware(store, cfg, handlers.KYCStatusHandler(store)))
 	router.Handle("/api/v1/leaderboard", handlers.LeaderboardHandler(store))
@@ -167,6 +180,12 @@ func healthHandler(store *db.Store, cfg *config.Config, financial *handlers.Fina
 			ready = false
 		} else {
 			checks["object_storage"] = "ready"
+		}
+		if _, err := store.RealtimeMetrics(ctx); err != nil {
+			checks["realtime"] = err.Error()
+			ready = false
+		} else {
+			checks["realtime"] = "ready"
 		}
 		if err := financial.ProviderHealth(ctx); err != nil {
 			checks["payment_provider"] = err.Error()

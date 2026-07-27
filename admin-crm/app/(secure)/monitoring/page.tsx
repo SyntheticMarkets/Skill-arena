@@ -29,6 +29,16 @@ export default function MonitoringPage() {
         <Panel title="Queue position" description="Background coordination and recovery workload"><div className="mini-metrics"><Metric label="Pending" value={resource.data.queue.pendingJobs} /><Metric label="Running" value={resource.data.queue.runningJobs} /><Metric label="Failed" value={resource.data.queue.failedJobs} tone={resource.data.queue.failedJobs ? "danger" : "default"} /><Metric label="Retries" value={resource.data.queue.retryCount} /></div></Panel>
         <Panel title="Worker state" description="Latest heartbeat reported by each worker"><div className="health-list">{Object.entries(resource.data.queue.workerStatus || {}).map(([name, status]) => <div key={name}><span>{name.replaceAll("_", " ")}</span><Badge tone={status === "healthy" || status === "ok" ? "healthy" : "warning"}>{status}</Badge></div>)}</div></Panel>
       </div>
+      <Panel title="Realtime Arena" description="Read-only gateway, presence, matchmaking, and recovery state">
+        <div className="mini-metrics">
+          <Metric label="Online" value={resource.data.realtime.onlinePlayers} />
+          <Metric label="Queued" value={resource.data.realtime.queuedPlayers} />
+          <Metric label="Live matches" value={resource.data.realtime.activeMatches} />
+          <Metric label="Replay backlog" value={resource.data.realtime.replayBacklog} tone={resource.data.realtime.replayBacklog ? "warning" : "default"} />
+          <Metric label="Oldest queue" value={`${resource.data.realtime.oldestQueueSeconds}s`} />
+          <Metric label="Gateway latency" value={`${resource.data.realtime.gatewayLatencyMs.toFixed(1)} ms`} />
+        </div>
+      </Panel>
     </>
   );
 }

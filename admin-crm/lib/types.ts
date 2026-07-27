@@ -177,6 +177,19 @@ export type Monitoring = {
     retryCount: number;
     workerStatus: Record<string, string>;
   };
+  realtime: {
+    connections: number;
+    onlinePlayers: number;
+    queuedPlayers: number;
+    activeMatches: number;
+    reconnects: number;
+    matchesCreated: number;
+    matchErrors: number;
+    replayBacklog: number;
+    gatewayLatencyMs: number;
+    oldestQueueSeconds: number;
+    checkedAt: string;
+  };
   dependencies: Record<string, string>;
   alerts: string[];
 };

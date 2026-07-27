@@ -9,6 +9,8 @@ const (
 	JobLeaderboardRecalculate = "leaderboard_recalculate"
 	JobTournamentRewardPayout = "tournament_reward_payout"
 	JobTelemetryAggregation   = "telemetry_aggregation"
+	JobRealtimeMaintenance    = "realtime_maintenance"
+	JobRealtimeReplayPersist  = "realtime_replay_persist"
 )
 
 const (

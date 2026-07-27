@@ -16,3 +16,8 @@ var FinancialCompletion string
 //
 //go:embed 006_admin_crm.sql
 var AdminCRM string
+
+// RealtimeArena is the normalized Sprint 5 session, queue, presence, and replay schema.
+//
+//go:embed 007_realtime_arena.sql
+var RealtimeArena string

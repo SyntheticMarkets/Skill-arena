@@ -55,7 +55,7 @@ Do not create frontend placeholders that depend on unfinished backend work. Do n
 
 ### Release 1.0 Architecture
 
-Status: **Sprints 1-4 complete and frozen. Sprint 5 has not begun.**
+Status: **Sprints 1-5 complete and frozen. Sprint 6 has not begun.**
 
 Release 1.0 is organized as independently owned product domains. A frozen domain may receive bug fixes, security fixes, performance work, scalability work, or integration support, but its business contract may not be silently redesigned by a later sprint.
 
@@ -73,7 +73,8 @@ Skill Arena Release 1.0
 |
 +-- Sprint 4: Admin CRM                       [COMPLETE - FROZEN]
 |
-+-- Sprint 5: Realtime Arena                  [PLANNED]
++-- Sprint 5: Realtime Arena                  [COMPLETE - FROZEN]
+|   `-- tag: sprint-5-v1.0-freeze
 |
 +-- Sprint 6: Maze Arena                      [PLANNED]
 |
@@ -89,7 +90,7 @@ Skill Arena Release 1.0
 | 2 | Player Platform | Arena Hub, navigation, player profile, notifications, support entry, and game discovery | Frozen |
 | 3 | Financial Platform | Wallet, ledger, deposits, withdrawals, limits, assessments, responsible gaming, Payment Core, and Treasury contracts | Frozen |
 | 4 | Admin CRM | Separate staff identity, permissions, operations, compliance, finance, support, audit, and monitoring application | Complete - frozen at `sprint-4-v1.0-freeze` |
-| 5 | Realtime Arena | Authenticated gateway, presence, live events, reconnect, ordering, and distributed coordination | Planned |
+| 5 | Realtime Arena | Authenticated gateway, presence, live events, reconnect, ordering, and distributed coordination | Complete - frozen at `sprint-5-v1.0-freeze` |
 | 6 | Maze Arena | Deterministic puzzle pipeline, authoritative gameplay, PvP, replay, and game-specific presentation | Planned |
 | 7 | Competition Platform | Tournament, season, leaderboard, reward, spectator, dispute, and competition settlement lifecycles | Planned |
 | 8 | Production Launch | Provider certification, jurisdiction approval, deployment, disaster recovery, load, chaos, security, and launch-candidate verification | Planned |
@@ -781,12 +782,94 @@ Freeze decision: **SPRINT 4 APPROVED.** The separate Admin CRM, its secured APIs
 
 Visible outcome: players receive authenticated live presence, match, notification, and reconnect events across the platform.
 
-Required foundation work:
+Implementation status: complete and frozen. Sprint 5 does not implement Maze rules or any other game-specific action.
 
-- Implement the authenticated WebSocket Session Gateway and versioned event protocol.
-- Use Redis for production sessions, presence, queues, atomic rate limits, and ownership-safe distributed locks.
-- Implement reconnect, resume, heartbeats, ordering, deduplication, backpressure, and graceful dependency failure.
-- Load-test concurrent connections and chaos-test Redis, PostgreSQL, and gateway failure behavior.
+#### Realtime Architecture
+
+```text
+Authenticated player
+        |
+        +-- REST: queue and lifecycle intents
+        |
+        `-- WebSocket: session negotiation, heartbeat, sync, and events
+                         |
+                         v
+                  Realtime Arena
+              / lifecycle authority
+             /  matchmaking policy
+            /   presence and recovery
+           /    ordered event stream
+          v
+PostgreSQL authoritative state | Redis coordination | Object storage replays
+          |
+          v
+Arena Core game registry and versioned capability contracts
+```
+
+- Clients submit intent only. They cannot submit match results, authoritative timestamps, state versions, queue priority, opponents, rewards, or wallet effects.
+- Match states are `created`, `waiting_for_players`, `ready`, `starting`, `live`, `paused`, `reconnecting`, then `completed`, `cancelled`, or `abandoned`.
+- Queue matching is game, mode, wallet category, region, jurisdiction, rating, latency, priority, and restriction aware. Priority is calculated by the server.
+- Practice creates an independent match and seed reference. PvP creates one match with a shared server seed reference and independent participant state.
+- Each game is accepted only through Arena Core metadata, version, mode, and capability declarations. Realtime Arena never imports Maze rules.
+- PostgreSQL migration `007_realtime_arena.sql` normalizes matches, participants, queues, presence, events, snapshots, and replay manifests.
+- Every event receives an atomic per-match sequence and chained HMAC integrity hash. Every state transition records a checksummed snapshot.
+- Reconnect returns the current authoritative snapshot plus all events after the client's acknowledged sequence. Clients deduplicate by sequence.
+- Terminal sessions enqueue durable replay persistence. Replay manifests include game, rules, protocol, replay versions, event range, root hash, signature, and object-storage key.
+- Redis coordinates matchmaking locks and connection throttles. Gateways hold no authoritative match state, so clients may reconnect to another node.
+- The realtime worker expires queues and presence, abandons expired reconnect windows, and persists replay artifacts. Admin CRM exposes read-only operational metrics.
+
+#### Realtime API v1
+
+All routes require a valid, non-revoked player session. Competition restrictions are evaluated before queue or match access.
+
+| Method | Route | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/realtime/queue` | Enter Practice, PvP, or Tournament matchmaking |
+| `GET` | `/api/v1/realtime/queue` | Read the player's latest queue state |
+| `DELETE` | `/api/v1/realtime/queue` | Cancel an active queue entry |
+| `GET` | `/api/v1/realtime/matches/{matchId}` | Read an owned authoritative match snapshot |
+| `POST` | `/api/v1/realtime/matches/{matchId}/ready` | Signal participant readiness |
+| `POST` | `/api/v1/realtime/matches/{matchId}/leave` | Leave; the server decides cancellation, abandonment, or forfeit completion |
+| `POST` | `/api/v1/realtime/matches/{matchId}/reconnect` | Recover snapshot and ordered events after a sequence |
+| `POST` | `/api/v1/realtime/matches/{matchId}/heartbeat` | Refresh presence and receive server time |
+| `GET` | `/api/v1/realtime/events/{matchId}?after={sequence}` | Read an owned ordered event delta |
+| `GET` | `/api/v1/realtime/replays/{matchId}` | Read signed replay metadata for an owned terminal match |
+| `GET` | `/api/v1/realtime/gateway` | Upgrade to the authenticated WebSocket protocol |
+
+Gateway client messages are limited to `heartbeat`, `subscribe`, `reconnect`, `ready`, `leave`, and `ack`. Unknown messages and client-authored state are rejected. Approved origins, connection rate limits, read limits, ping/pong deadlines, write deadlines, and bounded client reconnection apply.
+
+#### Realtime Configuration
+
+Production configuration is environment-only:
+
+- `SKILL_ARENA_REALTIME_QUEUE_TTL_SECONDS`
+- `SKILL_ARENA_REALTIME_PRESENCE_TTL_SECONDS`
+- `SKILL_ARENA_REALTIME_RECONNECT_SECONDS`
+- `SKILL_ARENA_REALTIME_MAX_RATING_GAP`
+- `SKILL_ARENA_REALTIME_MAX_LATENCY_MS`
+- `SKILL_ARENA_REALTIME_MAX_MESSAGE_BYTES`
+- `SKILL_ARENA_REALTIME_CONNECTIONS_PER_MINUTE`
+
+#### Sprint 5 Production Validation
+
+Validation date: 2026-07-27.
+
+- Backend: all 16 test-bearing packages passed. `go vet ./...` and `go build ./...` passed after repository-wide `gofmt`.
+- Realtime core: seven focused tests passed, covering origin rejection, duplicate active-connection rejection, 100 concurrent authenticated gateway negotiations, non-Maze lifecycle execution, independent Practice seeds, event-chain integrity, replay signing, reconnect, and 100-player concurrent matchmaking without duplicate pairing.
+- PostgreSQL: `TestPostgresRealtimeRepository` passed against an isolated fresh PostgreSQL 17 cluster after applying every migration through `007_realtime_arena.sql`. Match, participant, queue, presence, event, snapshot, and metrics persistence were verified.
+- Distributed coordination: Redis locks now use random ownership tokens and compare-and-delete release semantics. Non-owners cannot release a lock. Matchmaking rechecks authoritative queue state after acquiring the lock.
+- Browser client: Vitest passed 5 files and 9 tests. The reusable realtime client has 68.23% statement and 70.66% line coverage. TypeScript, ESLint, and the 23-route Next.js 16.2.11 production build passed.
+- Admin CRM: Vitest passed 2 files and 5 tests. Coverage measured 56.75% statements and 61.76% lines. TypeScript, ESLint, and the 13-route production build passed. Realtime monitoring remains read-only.
+- End to end: the complete Sprint 1-5 Playwright regression passed 21 journeys with zero failure contexts and 21 videos. The final strengthened realtime queue, start, reconnect, and terminal-state journey passed again on desktop, tablet, and mobile.
+- Performance baseline: Practice lifecycle benchmark measured `4,344,815 ns/op`, `42,474 B/op`, and 130 allocations per operation on an Intel i7-8665U. The final 100-connection gateway test completed in 3.34 seconds; the 100-player no-double-pair matchmaking test completed in 3.54 seconds.
+- Security: cookie-authenticated gateway access, JWT session revocation, approved-origin enforcement, competition restrictions, input allowlists, 8 KiB configurable messages, connection throttling, single active player connection, heartbeat deadlines, server time, sequence deduplication, ownership checks, HMAC event chains, signed replay manifests, and client-state rejection were verified.
+- Dependencies: production `npm audit` reported zero vulnerabilities for the Player Platform and Admin CRM.
+- Repository integrity: 500 tracked and pending files were scanned. There were no zero-byte files; all 267 text files had no NUL bytes or invalid UTF-8; migration prefixes and model type declarations were unique; `git diff --check` passed.
+- Evidence: current desktop, tablet, and mobile screenshots and videos are stored under `docs/proof/sprint-5-realtime-arena/`.
+
+Docker was unavailable in the validation environment. Compose wiring, health checks, production environment variables, PostgreSQL, Redis, object storage, workers, API, Player Platform, and Admin CRM dependencies were reviewed statically. Target-orchestrator deployment and network chaos remain Release 1.0 launch verification, not missing Sprint 5 application code.
+
+Freeze decision: **SPRINT 5 APPROVED.** Realtime Arena is frozen at `sprint-5-v1.0-freeze`. Future changes are limited to bug fixes, security fixes, performance, scalability, and integration support. Maze Arena remains Sprint 6 and has not begun.
 
 ### Sprint 6: Maze Arena
 

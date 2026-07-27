@@ -17,15 +17,18 @@ import (
 	"skill-arena/internal/email"
 	"skill-arena/internal/id"
 	"skill-arena/internal/models"
+	"skill-arena/internal/realtime"
 )
 
 const (
-	WorkerReplay      = "replay_worker"
-	WorkerEmail       = "email_worker"
-	WorkerLeaderboard = "leaderboard_worker"
-	WorkerTournament  = "tournament_worker"
-	WorkerTelemetry   = "telemetry_worker"
-	WorkerBackup      = "backup_worker"
+	WorkerReplay              = "replay_worker"
+	WorkerEmail               = "email_worker"
+	WorkerLeaderboard         = "leaderboard_worker"
+	WorkerTournament          = "tournament_worker"
+	WorkerTelemetry           = "telemetry_worker"
+	WorkerBackup              = "backup_worker"
+	WorkerRealtime            = "realtime_worker"
+	WorkerRealtimeMaintenance = "realtime_maintenance_worker"
 )
 
 type Manager struct {
@@ -53,7 +56,52 @@ func (m *Manager) Start(ctx context.Context) {
 	m.startWorker(ctx, WorkerTournament, []string{models.JobTournamentRewardPayout}, m.processTournament)
 	m.startWorker(ctx, WorkerTelemetry, []string{models.JobTelemetryAggregation}, m.processTelemetry)
 	m.startWorker(ctx, WorkerBackup, []string{models.JobBackupRun}, m.processBackup)
+	m.startWorker(ctx, WorkerRealtime, []string{models.JobRealtimeReplayPersist}, m.processRealtime)
 	m.startBackupScheduler(ctx)
+	m.startRealtimeScheduler(ctx)
+}
+
+func (m *Manager) startRealtimeScheduler(ctx context.Context) {
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.store.SetWorkerHealth(ctx, WorkerRealtimeMaintenance, "running", "")
+		defer m.store.SetWorkerHealth(context.Background(), WorkerRealtimeMaintenance, "stopped", "")
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			if _, err := m.store.RunRealtimeMaintenance(ctx, time.Now().UTC()); err != nil {
+				m.store.SetWorkerHealth(ctx, WorkerRealtimeMaintenance, "failed", err.Error())
+			} else {
+				m.store.SetWorkerHealth(ctx, WorkerRealtimeMaintenance, "running", "")
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+func (m *Manager) processRealtime(ctx context.Context, job *models.BackgroundJob) (string, error) {
+	service := realtime.NewService(m.store)
+	switch job.Type {
+	case models.JobRealtimeReplayPersist:
+		if job.Payload["matchId"] == "" {
+			return "", errors.New("realtime replay job requires matchId")
+		}
+		if err := service.FinalizeReplay(ctx, job.Payload["matchId"]); err != nil {
+			return "", err
+		}
+		replay, err := m.store.GetRealtimeReplay(ctx, job.Payload["matchId"])
+		if err != nil {
+			return "", err
+		}
+		return replay.StorageKey, nil
+	default:
+		return "", errors.New("unsupported realtime job")
+	}
 }
 
 func (m *Manager) Shutdown(ctx context.Context) error {

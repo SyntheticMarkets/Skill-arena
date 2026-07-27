@@ -3,6 +3,8 @@ package redis
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -17,8 +19,8 @@ type Client interface {
 	Set(context.Context, string, string, time.Duration) error
 	Get(context.Context, string) (string, bool, error)
 	Del(context.Context, string) error
-	Lock(context.Context, string, time.Duration) (bool, error)
-	Unlock(context.Context, string) error
+	Lock(context.Context, string, time.Duration) (string, bool, error)
+	Unlock(context.Context, string, string) error
 	Allow(context.Context, string, int, time.Duration) (bool, error)
 	Health(context.Context) error
 }
@@ -26,7 +28,7 @@ type Client interface {
 type MemoryClient struct {
 	mu    sync.Mutex
 	items map[string]memoryItem
-	locks map[string]time.Time
+	locks map[string]memoryLock
 }
 
 type memoryItem struct {
@@ -34,8 +36,13 @@ type memoryItem struct {
 	expiresAt time.Time
 }
 
+type memoryLock struct {
+	token     string
+	expiresAt time.Time
+}
+
 func NewMemoryClient() *MemoryClient {
-	return &MemoryClient{items: map[string]memoryItem{}, locks: map[string]time.Time{}}
+	return &MemoryClient{items: map[string]memoryItem{}, locks: map[string]memoryLock{}}
 }
 
 func (c *MemoryClient) Set(ctx context.Context, key, value string, ttl time.Duration) error {
@@ -79,29 +86,37 @@ func (c *MemoryClient) Del(ctx context.Context, key string) error {
 	return nil
 }
 
-func (c *MemoryClient) Lock(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+func (c *MemoryClient) Lock(ctx context.Context, key string, ttl time.Duration) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return false, err
+		return "", false, err
 	}
 	if ttl <= 0 {
-		return false, errors.New("lock ttl must be positive")
+		return "", false, errors.New("lock ttl must be positive")
+	}
+	token, err := lockToken()
+	if err != nil {
+		return "", false, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := time.Now().UTC()
-	if expires, ok := c.locks[key]; ok && expires.After(now) {
-		return false, nil
+	if lock, ok := c.locks[key]; ok && lock.expiresAt.After(now) {
+		return "", false, nil
 	}
-	c.locks[key] = now.Add(ttl)
-	return true, nil
+	c.locks[key] = memoryLock{token: token, expiresAt: now.Add(ttl)}
+	return token, true, nil
 }
 
-func (c *MemoryClient) Unlock(ctx context.Context, key string) error {
+func (c *MemoryClient) Unlock(ctx context.Context, key, token string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	lock, ok := c.locks[key]
+	if !ok || lock.token != token {
+		return errors.New("lock is not owned by token")
+	}
 	delete(c.locks, key)
 	return nil
 }
@@ -169,22 +184,42 @@ func (c NetworkClient) Del(ctx context.Context, key string) error {
 	return err
 }
 
-func (c NetworkClient) Lock(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+func (c NetworkClient) Lock(ctx context.Context, key string, ttl time.Duration) (string, bool, error) {
 	if ttl <= 0 {
-		return false, errors.New("lock ttl must be positive")
+		return "", false, errors.New("lock ttl must be positive")
 	}
-	value, err := c.command(ctx, "SET", "lock:"+key, "1", "NX", "PX", strconv.FormatInt(ttl.Milliseconds(), 10))
+	token, err := lockToken()
+	if err != nil {
+		return "", false, err
+	}
+	value, err := c.command(ctx, "SET", "lock:"+key, token, "NX", "PX", strconv.FormatInt(ttl.Milliseconds(), 10))
 	if err != nil {
 		if errors.Is(err, errNil) {
-			return false, nil
+			return "", false, nil
 		}
-		return false, err
+		return "", false, err
 	}
-	return strings.EqualFold(value, "OK"), nil
+	return token, strings.EqualFold(value, "OK"), nil
 }
 
-func (c NetworkClient) Unlock(ctx context.Context, key string) error {
-	return c.Del(ctx, "lock:"+key)
+func (c NetworkClient) Unlock(ctx context.Context, key, token string) error {
+	const script = `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end`
+	value, err := c.command(ctx, "EVAL", script, "1", "lock:"+key, token)
+	if err != nil {
+		return err
+	}
+	if value != "1" {
+		return errors.New("lock is not owned by token")
+	}
+	return nil
+}
+
+func lockToken() (string, error) {
+	var value [24]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value[:]), nil
 }
 
 func (c NetworkClient) Allow(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {

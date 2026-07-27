@@ -75,6 +75,7 @@ type RuntimeSettings struct {
 	Financial   FinancialSettings
 	Storage     StorageSettings
 	CORS        CORSSettings
+	Realtime    RealtimeSettings
 }
 
 type DifficultySettings struct {
@@ -262,6 +263,16 @@ type CORSSettings struct {
 	AllowedOrigins []string
 }
 
+type RealtimeSettings struct {
+	QueueTTL        time.Duration
+	PresenceTTL     time.Duration
+	ReconnectWindow time.Duration
+	MaxRatingGap    int
+	MaxLatencyMS    int
+	MaxMessageBytes int64
+	ConnectionLimit int
+}
+
 func (p PaymentSettings) ProviderStatus() map[string]bool {
 	return map[string]bool{
 		"stripe": p.StripeSecretKey != "" && p.StripeWebhookSecret != "" && p.StripeAPIBase != "",
@@ -409,6 +420,15 @@ func LoadRuntimeSettings() *RuntimeSettings {
 		CORS: CORSSettings{
 			AllowedOrigins: envList("SKILL_ARENA_ALLOWED_ORIGINS", []string{"http://localhost:3000", "http://localhost:5173"}),
 		},
+		Realtime: RealtimeSettings{
+			QueueTTL:        time.Duration(envInt("SKILL_ARENA_REALTIME_QUEUE_TTL_SECONDS", 120)) * time.Second,
+			PresenceTTL:     time.Duration(envInt("SKILL_ARENA_REALTIME_PRESENCE_TTL_SECONDS", 45)) * time.Second,
+			ReconnectWindow: time.Duration(envInt("SKILL_ARENA_REALTIME_RECONNECT_SECONDS", 30)) * time.Second,
+			MaxRatingGap:    envInt("SKILL_ARENA_REALTIME_MAX_RATING_GAP", 250),
+			MaxLatencyMS:    envInt("SKILL_ARENA_REALTIME_MAX_LATENCY_MS", 500),
+			MaxMessageBytes: int64(envInt("SKILL_ARENA_REALTIME_MAX_MESSAGE_BYTES", 8192)),
+			ConnectionLimit: envInt("SKILL_ARENA_REALTIME_CONNECTIONS_PER_MINUTE", 10),
+		},
 	}
 }
 
@@ -453,6 +473,12 @@ func validateProduction(cfg *Config) error {
 	}
 	if len(cfg.Settings.CORS.AllowedOrigins) == 0 {
 		return errors.New("production CORS allowed origins are required")
+	}
+	if cfg.Settings.Realtime.QueueTTL <= 0 || cfg.Settings.Realtime.PresenceTTL <= 0 ||
+		cfg.Settings.Realtime.ReconnectWindow <= 0 || cfg.Settings.Realtime.MaxRatingGap < 0 ||
+		cfg.Settings.Realtime.MaxLatencyMS <= 0 || cfg.Settings.Realtime.MaxMessageBytes < 1024 ||
+		cfg.Settings.Realtime.ConnectionLimit <= 0 {
+		return errors.New("production realtime limits must be positive and valid")
 	}
 	for _, origin := range cfg.Settings.CORS.AllowedOrigins {
 		parsed, err := url.Parse(origin)
