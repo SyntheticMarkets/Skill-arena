@@ -40,7 +40,7 @@ describe('Realtime client', () => {
     socket.message({ type: 'match.event', event: { matchId: 'match-1', sequence: 5, integrityHash: 'hash' } })
     socket.message({ type: 'match.event', event: { matchId: 'match-1', sequence: 5, integrityHash: 'hash' } })
     expect(events).toEqual([5])
-    expect(JSON.parse(socket.sent.at(-1) ?? '{}')).toMatchObject({ type: 'ack', afterSequence: 5 })
+    expect(JSON.parse(socket.sent[socket.sent.length - 1] ?? '{}')).toMatchObject({ type: 'ack', afterSequence: 5 })
     client.close()
   })
 

@@ -14,6 +14,10 @@ Documentation maintenance rules:
 ## Contents
 
 - [Vertical Production Roadmap](#vertical-production-roadmap)
+- [Sprint 6 Phase 1: Stray Arrows Architecture Review](#sprint-6-phase-1-stray-arrows-architecture-review)
+- [Sprint 6 Phase 2: Maze Arena Architecture And Games Platform](#sprint-6-phase-2-maze-arena-architecture-and-games-platform)
+- [Sprint 6 Phase 3: Puzzle Generator And Solver Design](#sprint-6-phase-3-puzzle-generator-and-solver-design)
+- [Sprint 6 Phase 4: Implementation Blueprint](#sprint-6-phase-4-implementation-blueprint)
 - [Product Identity](#product-identity)
 - [Design Principles](#design-principles)
 - [Competitive Psychology](#competitive-psychology)
@@ -869,7 +873,7 @@ Validation date: 2026-07-27.
 
 Docker was unavailable in the validation environment. Compose wiring, health checks, production environment variables, PostgreSQL, Redis, object storage, workers, API, Player Platform, and Admin CRM dependencies were reviewed statically. Target-orchestrator deployment and network chaos remain Release 1.0 launch verification, not missing Sprint 5 application code.
 
-Freeze decision: **SPRINT 5 APPROVED.** Realtime Arena is frozen at `sprint-5-v1.0-freeze`. Future changes are limited to bug fixes, security fixes, performance, scalability, and integration support. Maze Arena remains Sprint 6 and has not begun.
+Freeze decision: **SPRINT 5 APPROVED.** Realtime Arena is frozen at `sprint-5-v1.0-freeze`. Future changes are limited to bug fixes, security fixes, performance, scalability, and integration support. Maze Arena production implementation remains Sprint 6 and has not begun.
 
 ### Sprint 6: Maze Arena
 
@@ -883,6 +887,4251 @@ Required foundation work:
 - Complete replay signatures over seed, puzzle hash, generation hash, difficulty profile, rules version, ordered actions, timing, and outcome.
 - Store immutable replay artifacts in object storage and support verification, playback, and disputes.
 - Prove deterministic reconstruction and gameplay parity through integration and end-to-end tests.
+
+#### Sprint 6 Phase 1: Stray Arrows Architecture Review
+
+Status: **COMPLETE - DOCUMENTATION REVIEW ONLY**
+
+Approval: **APPROVED**
+
+Decision: **SPRINT 6 IMPLEMENTATION HAS NOT STARTED.**
+
+This review compares the supplied `sample app/stray-arrows` project with the frozen Skill Arena architecture. It does not approve the reference code for production use, redesign Arena Core, or authorize Phase 2.
+
+##### Review Scope And Evidence
+
+The review covered:
+
+- The standalone root and `www` game bundles.
+- `index.html`, `handcrafted-levels.js`, `levels-baked.js`, and the service worker.
+- The generator, baker, handcrafted validator, rendering, input, animation, sound, persistence, PWA, Android, and iOS structure.
+- The current Skill Arena game registry, Maze module, Puzzle Service, Realtime Arena, replay models, frontend Maze preview, and README product contract.
+- The frozen Sprint 1 through Sprint 5 ownership boundaries.
+
+Verified evidence:
+
+- The reference contains 141 files including generated native wrappers and assets.
+- Root and `www` copies of the six shipped web artifacts are byte-identical.
+- All five handcrafted tutorial boards pass geometry and solvability validation.
+- The baked catalogue contains 500 distinct serialized boards.
+- The baked catalogue contains no overlapping cells, invalid directions, or non-contiguous arrow paths under the supplied rules.
+- Eight baked boards are unsolvable: levels 18, 20, 21, 22, 23, 298, 407, and 415.
+- The eight deadlocked boards leave between 15 and 29 arrows stuck.
+- The baker knowingly falls back to its first candidate when all candidates fail, even when that candidate is deadlocked.
+- The current reference has no authoritative server, action journal, replay contract, integrity signature, or dispute evidence.
+
+##### Executive Conclusion
+
+The supplied game is a strong **gameplay and presentation reference**, but it is not a production Maze module and must not be copied into Skill Arena.
+
+The most valuable reusable ideas are:
+
+- Cell-based arrow geometry.
+- Directional escape-ray collision rules.
+- Monotonic dependency clearing.
+- Seeded procedural generation concepts.
+- Handcrafted teaching boards.
+- Camera, zoom, pan, hit testing, rendering, sound, haptics, and motion concepts.
+
+The following cannot be reused as production authority:
+
+- Client-side generation and validation.
+- Public and predictable seed derivation.
+- Fixed baked levels.
+- Local timers, scores, lives, rewards, coins, progression, and completion.
+- `localStorage` persistence.
+- Client-owned daily and weekly challenge dates.
+- Standalone ads, achievements, menus, PWA ownership, and native wrappers.
+
+The current Skill Arena Maze implementation is also not yet reference-compatible. It has useful server-side foundations, but it combines two different games:
+
+- A legacy grid maze with a moving start/end player path.
+- An arrow-line puzzle using routed points and dependency metadata.
+
+Sprint 6 must establish one approved Maze Arena ruleset. The supplied reference and the current product direction both identify that ruleset as the arrow escape game.
+
+##### Frozen Ownership Boundary
+
+Realtime Arena remains responsible for:
+
+- Authentication and authorization.
+- Matchmaking and queue ownership.
+- Match lifecycle.
+- Presence and connection ownership.
+- WebSocket transport.
+- Heartbeats, disconnect, reconnect, and ordered synchronization.
+- Generic match events and snapshots.
+- Generic replay persistence and signing infrastructure.
+- Server time, sequence enforcement, security, monitoring, and scaling.
+
+Maze Arena is responsible only for:
+
+- Arrow-puzzle generation.
+- Puzzle solving and validation.
+- Collision and move rules.
+- Maze-specific authoritative board state.
+- Difficulty analysis and scoring inputs.
+- Progress and completion calculation.
+- Maze-specific action and replay payloads.
+- Renderer data and Maze presentation.
+
+Maze Arena must not create its own authentication, matchmaking, WebSocket, presence, session, reconnect, generic replay storage, wallet, reward, or tournament infrastructure.
+
+##### Actual Reference Rules
+
+The supplied reference implements these mechanics:
+
+1. An arrow is an ordered list of occupied grid cells from tail to head.
+2. Each arrow has one immutable direction: right, up, left, or down.
+3. A tap selects an arrow by proximity to any cell in its body.
+4. The escape ray starts one cell beyond the arrow head and continues in the arrow direction to the board edge.
+5. Any occupied cell belonging to another live arrow blocks that ray.
+6. A clear arrow is removed from logical state immediately and its exit animation begins.
+7. A blocked arrow remains in logical state.
+8. Removing an arrow can make other arrows clear because all collision checks use the current live-arrow set.
+9. Completion occurs only when no live arrows remain.
+10. The reference does not automatically remove newly unblocked arrows. The player must tap each one.
+
+This is collision-derived dependency logic. A separate declared `DependsOn` list is not the rule; dependencies are a consequence of geometry and current occupancy.
+
+The reference's current blocked feedback is a short horizontal shake and sound. It does **not** slide the arrow to the blocker and return. The desired Skill Arena blocked-move animation therefore exceeds the supplied reference and must be specified separately in the implementation contract.
+
+The successful animation clips the rendered arrow along its existing polyline and then extends it beyond the head. Logical removal happens before the 1.2 second animation completes. Skill Arena may retain the visual concept, but server state and client presentation state must remain explicitly separate.
+
+##### KEEP
+
+The following should remain as reference behavior or design input:
+
+| Area | Keep | Reason |
+|---|---|---|
+| Core rule | An arrow can leave only when its directional escape ray is clear | This is the actual puzzle |
+| Direction | Fixed direction per arrow | Prevents rotation or client-selected movement |
+| Geometry | Ordered tail-to-head orthogonal cells | Deterministic and readable |
+| Dependencies | Recalculate from live geometry after every accepted action | Creates the puzzle chain |
+| Tutorial | Five small handcrafted teaching boards | All five validate and teach the rule progressively |
+| Generator concept | Seeded generation followed by a solver | Suitable starting principle |
+| Pattern bias | Braid, spiral, mosaic, piton, diagonal, rings, maze, and rays as generator inputs | Adds visual variety without changing rules |
+| Camera | Pinch zoom, wheel zoom, transform inversion, and bounded pan | Mature interaction foundation |
+| Input | Tap-versus-pan threshold and world-coordinate hit testing | Appropriate for touch play |
+| Rendering | Continuous rounded paths, proportional arrowheads, cached animation paths | Better than debug line graphics |
+| Feedback | Exit animation, blocked feedback, sound, haptics, reduced motion | Teaches outcomes without modal interruptions |
+| Performance ideas | Delta-time animation, cached background, limited hot-path allocation | Useful renderer guidance |
+| Mobile lessons | Safe-area handling and crisp canvas transforms | Useful for responsive implementation |
+
+KEEP means preserve the behavior or lesson, not copy the standalone source into production.
+
+##### MODIFY
+
+| Reference area | Required Skill Arena change |
+|---|---|
+| Generator | Port into a deterministic, versioned, server-only Maze generator |
+| Randomness | Replace public Park-Miller seeds and level-number formulas with server-derived seed material |
+| Puzzle pipeline | Enforce Generate -> Solve -> Validate -> Score -> Hash -> Persist metadata -> Deliver |
+| Retry behavior | Reject every failed candidate; never return an unsolvable fallback |
+| Solver | Return an independently verified solution and dependency analysis |
+| Validator | Validate geometry, occupancy, direction/head alignment, collisions, solvability, metadata, and hashes |
+| Difficulty | Accept an authoritative Difficulty Profile instead of deriving gameplay from a fixed level number |
+| Collision | Use one canonical server implementation shared by generation validation, live action validation, solver, and replay |
+| State | Store independent authoritative player board state for each participant |
+| Actions | Accept one ordered intent at a time with match, target, sequence, and server receipt time |
+| Timing | Use server match time; client time is telemetry only |
+| Progress | Derive cleared count, total count, combo, blocked actions, and completion on the server |
+| Scoring | Derive score from approved rules and authoritative events |
+| Replay | Record seed reference, versions, profile, ordered actions, server timing, results, and integrity data |
+| Rendering | Convert game state into a versioned renderer payload; do not expose mutable authority |
+| Correct animation | Keep the arrow visible until its presentation has completely exited |
+| Blocked animation | Add travel toward the nearest blocker, impact, recoil, and return without changing authoritative state |
+| Accessibility | Add semantic controls or an equivalent accessible interaction model around the canvas |
+| Tests | Extract mechanics from the monolithic page into deterministic fixtures and cross-language parity tests |
+
+##### REMOVE
+
+The following must not enter the Skill Arena Maze module:
+
+- The 500-board baked production catalogue.
+- Fixed post-tutorial levels as puzzle identities.
+- The public `level * 7919 + 31337` seed formula.
+- Client-side daily and weekly seed calculation from `Date.now()`.
+- Local best times, stars, hearts, coins, rewards, achievements, and progression authority.
+- Hint, continue, and skip purchases tied to standalone local coins.
+- AdMob reward and advertising logic.
+- `localStorage` as game, reward, challenge, or replay authority.
+- URL controls that alter production puzzle generation or unlock progression.
+- Service-worker ownership inside the Maze module.
+- Standalone menu, settings, statistics, update prompt, store listing, PWA, Android shell, and iOS shell.
+- Standalone app wallet/economy assumptions.
+- The legacy grid-walking maze as the production Maze Arena ruleset.
+- Any client API that submits score, completion, winner, seed, difficulty, reward, or board state.
+
+The reference project remains in `sample app/stray-arrows` as a review fixture. It is not a production dependency.
+
+##### MOVE Or Retain In Platform Services
+
+| Concern found in reference | Skill Arena owner |
+|---|---|
+| Login identity | Sprint 1 Identity and Security |
+| Player profile and progression | Sprint 2 Arena Hub |
+| Coins, stakes, deposits, withdrawals, and rewards | Sprint 3 Financial Platform |
+| Review, fraud, support, and disputes | Sprint 4 Admin CRM |
+| Queue, match, presence, network, reconnect, and session clock | Sprint 5 Realtime Arena |
+| Generic replay storage, signing, and delivery | Realtime Arena and object storage |
+| Tournament scheduling and prize settlement | Competition Platform in Sprint 7 |
+| Notifications | Arena Hub notification service |
+| Game-specific puzzle and rules | Sprint 6 Maze module |
+| Game-specific rendering | Sprint 6 Maze renderer |
+
+Nothing from the standalone game should replace a frozen platform service.
+
+##### Current Skill Arena Compatibility Findings
+
+| Area | Current state | Phase 1 conclusion |
+|---|---|---|
+| Game registry | `maze_arena` and `test_arena` implement the shared module contract | KEEP |
+| Manifest and versions | Maze declares game, rules, replay, protocol, modes, and capabilities | KEEP and extend only through version bumps |
+| Puzzle seed derivation | HMAC derivation includes purpose, match, player/shared identity, nonce, profile, and versions | KEEP |
+| Practice uniqueness | Non-shared generation includes player identity and a random nonce | Correct foundation |
+| PvP fairness | Existing legacy PvP generation assigns the same seed, hash, and cloned board to both players | Correct foundation |
+| Tournament fairness | Existing tournament generation assigns one shared puzzle per match | Correct foundation |
+| Generation locking | Practice, initial PvP, and initial bracket generation release the store lock before CPU generation | Correct foundation |
+| Next tournament round | `advanceTournamentLocked` performs puzzle generation while holding the global store lock | INCORRECT; must be corrected as a generic performance defect before that path is used |
+| Puzzle repository | Dedicated Puzzle Service defaults to an in-memory repository | Not production-ready for Sprint 6 |
+| Pipeline separation | Generator also produces a solution; validator replays it; difficulty score is profile input rather than measured output | MODIFY |
+| Generator fallback | Current Skill Arena generator can silently return an escape-only fallback after failed candidates | INCORRECT for authoritative difficulty |
+| Collision model | Server has geometric ray intersection, but generation also creates declared dependency metadata | Requires one canonical rule source |
+| Maze module | Supports both line clicks and legacy grid moves and accepts action batches | Must be narrowed to the approved arrow game |
+| Action result | `core.ActionResult` exposes Maze-specific moves, lines, and clicks | Existing game-agnostic boundary leak |
+| Session model | Generic `GameSession` contains Maze cells, start/end coordinates, lines, and clicks | Existing game-agnostic boundary leak |
+| Realtime gateway | Supports lifecycle, ready, leave, subscribe, reconnect, heartbeat, event polling, and sequence acknowledgement | KEEP |
+| Realtime actions | Gateway has no generic game-action message or module dispatch path | Missing integration required by every interactive game |
+| Replay infrastructure | Signed generic realtime event artifacts exist | KEEP |
+| Maze replay | Current Maze replay can persist full board data and uses client action timestamps in places | Does not satisfy seed-and-actions-only reconstruction |
+| Frontend | Maze previews are imported directly by landing, guest arena, and game pages | Maze presentation currently leaks outside a module boundary |
+
+The generic action-envelope gap benefits every future realtime game. If Sprint 6 needs an additive gateway extension for authenticated, sequenced game intent, that may qualify as frozen-platform integration support. It must remain game-agnostic, backward-compatible, and independently tested. Maze-specific message fields must not be added to the gateway contract.
+
+Maze-specific fields already present in generic models are recorded as architectural debt. Phase 1 does not authorize removing or breaking those frozen contracts. Phase 2 must determine whether Maze can use them safely or whether a backward-compatible generic state/event envelope is required.
+
+##### Puzzle Generation And Uniqueness Contract
+
+The production contract is:
+
+```text
+Server seed source
+  -> Generate candidate
+  -> Solve independently
+  -> Validate geometry and rules
+  -> Analyze actual difficulty
+  -> Calculate puzzle and generation hashes
+  -> Enforce uniqueness policy
+  -> Persist immutable metadata
+  -> Assign to match/session
+  -> Deliver renderer state
+```
+
+Mode rules:
+
+| Mode | Seed and puzzle rule |
+|---|---|
+| Tutorial | Approved handcrafted boards 1 through 5 may be reused as teaching fixtures and must be versioned |
+| Practice | Unique seed per player session; no intentional board reuse |
+| Training | Unique seed per training session unless an explicit lesson fixture is approved |
+| PvP or Ranked | One server-generated seed and identical puzzle metadata for both opponents; independent board states |
+| Daily Challenge | One approved shared seed for the challenge period |
+| Tournament | One shared seed per match; different matches receive different seeds |
+| Replay | Regenerate from immutable versioned seed metadata and replay authoritative actions |
+
+Uniqueness requires a database-enforced identity, not a probabilistic promise. At minimum, the generation hash or puzzle hash must be unique for modes that prohibit reuse. A seed collision, generation-hash collision, duplicate board hash, failed validation, or unavailable approved candidate must fail closed and request another candidate.
+
+The backend may deliver identical renderer state to both PvP players, but each participant must receive a separate mutable state record. One player's accepted action must never mutate the opponent's board.
+
+##### Deterministic Replay Assessment
+
+Reference game result: **NOT REPLAY READY**
+
+The reference could become deterministic at the pure mechanic level because its seeded generator and cell collision rules are deterministic for a fixed runtime implementation. It cannot currently produce a verifiable replay because it does not record:
+
+- Generator version.
+- Rules version.
+- Difficulty profile.
+- Puzzle hash.
+- Generation hash.
+- Ordered action IDs.
+- Server sequence numbers.
+- Server receipt times.
+- Accepted and rejected outcomes.
+- Match clock state.
+- Completion and score inputs.
+- Integrity signature.
+
+The production replay should store a compact authoritative event stream, not trust a saved client board. It must retain enough immutable version information to run the historical generator and rules implementation years later.
+
+Each action event must distinguish:
+
+- Intent received.
+- Accepted escape.
+- Rejected blocked action.
+- Rejected duplicate or unknown target.
+- Rejected stale or out-of-order sequence.
+- Rejected action after finish, timeout, leave, or forfeit.
+
+Renderer-only animation events may be derived from authoritative outcomes. They must not be used to decide game state.
+
+##### Server Authority
+
+The server must own:
+
+- Seed selection and uniqueness.
+- Difficulty profile.
+- Generator, solver, validator, and difficulty analysis versions.
+- Puzzle identity, generation hash, and puzzle hash.
+- Participant board state.
+- Arrow occupancy and removal state.
+- Collision and nearest-blocker calculation.
+- Action ordering and deduplication.
+- Accepted and rejected move outcomes.
+- Match timer, timeout, disconnect, reconnect, and forfeit.
+- Combo, progress, completion, score, winner, draw, and result.
+- Replay events, integrity signature, storage, and dispute evidence.
+- Eligibility, rewards, progression, and settlement events.
+
+The client must send only intent such as:
+
+```json
+{
+  "type": "game.action",
+  "matchId": "mat_...",
+  "sequence": 17,
+  "action": {
+    "type": "arrow.click",
+    "targetId": "arrow_23"
+  }
+}
+```
+
+This is a conceptual Phase 1 example, not an approved API contract.
+
+##### Client Responsibilities
+
+The client may own:
+
+- Rendering the server-provided immutable puzzle geometry.
+- Camera, zoom, pan, resize, and coordinate transforms.
+- Hit testing that resolves a pointer position to an arrow intent.
+- Optimistic press feedback that cannot commit game state.
+- Animating server-accepted escapes.
+- Animating server-rejected blocked impacts and returns.
+- Sound, haptics, reduced-motion presentation, and accessibility.
+- Displaying server-owned time, progress, combo, opponent progress, and result.
+- Requesting sync after a sequence gap or reconnect.
+
+The client must roll back or resynchronize presentation when an optimistic interaction disagrees with the authoritative response.
+
+##### Security And Exploit Review
+
+The supplied reference is vulnerable by design as an offline casual game:
+
+| Exploit | Reference exposure | Required production control |
+|---|---|---|
+| State editing | All arrows and state live in browser memory | Server-owned participant state |
+| Save editing | Progress, coins, lives, stars, and results use `localStorage` | Authenticated durable repositories |
+| Timer editing | Timer increments from client animation delta | Server match clock |
+| Score/reward editing | Completion directly credits local coins and achievements | Platform event settlement |
+| Seed prediction | Public level formula and Park-Miller RNG | Secret server derivation plus random nonce |
+| Fixed-solution lookup | 500 baked boards ship to every client | Unique server-generated live puzzles |
+| Daily challenge manipulation | Client date controls seed and completion key | Server challenge schedule |
+| Action fabrication | No authenticated action stream | JWT session, participant check, sequence, idempotency |
+| Packet replay | No nonce or action deduplication | Match-scoped monotonic sequence and dedupe |
+| Replay editing | No signed replay exists | Signed immutable authoritative events |
+| Completion fabrication | Client marks arrows dead and decides completion | Server validator and finish state |
+| Bot solving | Full board and deterministic rules are locally inspectable | Behavioral telemetry, rate plausibility, replay review; never rely on obscurity |
+| Memory automation | Public `_ae` helpers expose generation and board state | Production bundle exposes renderer data only |
+| Difficulty override | URL flags alter level and fresh/dot modes | Server-selected profile; reject client overrides |
+| Offline stale build | Service worker caches game assets | Platform-controlled version negotiation |
+| Multi-action speedup | Current Skill Arena Maze module accepts batches | One ordered action intent or strictly bounded protocol |
+| Client timestamps | Current Maze paths preserve client action times | Treat as untrusted telemetry only |
+
+No anti-cheat design can prevent a player from seeing the puzzle that must be rendered. Competitive integrity must come from server authority, unique puzzles, authenticated ordering, timing analysis, deterministic replay, anomaly detection, and review evidence.
+
+##### Rendering, Camera, Animation, And Mobile Findings
+
+The reference provides useful quality targets:
+
+- A fixed logical 390 by 844 canvas with device-pixel-aware presentation.
+- Grid-centered zoom from 1.0 to 2.5.
+- Pinch zoom and pan with inverse hit testing.
+- One-finger pan only after zoom and movement threshold.
+- Rounded arrow shafts and joins.
+- Directional arrowheads derived from the final path segment.
+- Staggered board reveal.
+- Exit easing, sound, haptics, confetti, and reduced-motion handling.
+- Safe-area-aware top controls.
+
+Required changes:
+
+- The Skill Arena renderer must be a Maze module, not a whole application.
+- Layout must respond to platform navigation and match HUD rather than assume a portrait standalone canvas.
+- Desktop mouse pan should be supported intentionally, not only wheel zoom.
+- Canvas interaction needs an accessible alternative and keyboard/focus contract.
+- Arrow colors must remain legible and must not encode hidden authoritative information.
+- Blocked animation must use the server-provided blocker/collision result.
+- Correct-move presentation must wait for server acceptance.
+- PvP opponent state must expose only approved progress, not hidden board actions during the live match.
+
+##### Difficulty Assessment
+
+The reference's difficulty is mainly a function of level number, board dimensions, path length, cluster count, pattern bias, arrow count, and at most one blocker during generation. This is not sufficient as Skill Arena's authoritative Difficulty Profile.
+
+The production analyzer must measure actual output, including:
+
+- Arrow count and occupied-cell count.
+- Board width, height, density, and readable scale.
+- Dependency edge count.
+- Dependency depth.
+- Branching and number of simultaneously open choices.
+- Cross-dependency count.
+- Longest dependency chain.
+- Path-length distribution.
+- Direction distribution.
+- Visual overlap and routing complexity.
+- Expected solve-time percentiles.
+- Minimum required successful actions.
+- Difficulty confidence and rejection reason.
+
+Difficulty must come from player progression, league, season, mode, practice profile, or tournament rules. It must never be reduced because of server load, timeout avoidance, or lock contention.
+
+The current reference baker's scoring is useful research, but the output proves that candidate scoring cannot substitute for a hard validator.
+
+##### Phase 1 Classification Summary
+
+| Review area | Classification | Reason |
+|---|---|---|
+| Gameplay concept | KEEP | Strong deterministic monotonic puzzle rule |
+| Cell geometry | KEEP | Clear canonical collision representation |
+| Handcrafted tutorial 1-5 | KEEP | Validated teaching fixtures |
+| Baked level catalogue | REMOVE | Repeated public content and eight deadlocks |
+| Procedural generator | MODIFY | Useful heuristics, wrong runtime ownership and failure policy |
+| Solver | MODIFY | Useful monotonic solver, must be independent/versioned/authoritative |
+| Difficulty | MODIFY | Level-driven rather than measured profile output |
+| Collision validation | MODIFY | Correct concept, must become one server canonical implementation |
+| Camera and input | KEEP/MODIFY | Strong interaction work, must fit platform renderer/accessibility |
+| Rendering | KEEP/MODIFY | Good concepts, not reusable as a monolithic app |
+| Successful animation | KEEP/MODIFY | Good feedback; presentation must follow server acceptance |
+| Blocked animation | MODIFY | Reference shake is below approved impact/return behavior |
+| Local state and economy | REMOVE | Direct integrity violation |
+| Replay | MISSING | No action journal or integrity model |
+| Server authority | MISSING in reference | Everything is client-owned |
+| Current Arena registry | KEEP | Proven modular foundation |
+| Current Realtime lifecycle | KEEP | Correct frozen owner |
+| Generic realtime action dispatch | MISSING | Required generic integration point |
+| Current Maze rules parity | INCORRECT | Legacy grid maze plus non-equivalent dependency-line model |
+| Production Puzzle repository | MISSING | Memory-only dedicated repository |
+
+##### Phase 1 Decision And Stop Gate
+
+Phase 1 is complete as an engineering review.
+
+Sprint 6 remains **NOT STARTED** because no production implementation was authorized.
+
+Phase 2 may design the Maze module only after this report is approved. Phase 2 must resolve:
+
+1. The canonical cell-based arrow geometry and collision contract.
+2. The module-owned authoritative state envelope.
+3. The generic, backward-compatible Realtime Arena action envelope.
+4. The production puzzle repository and uniqueness constraints.
+5. The exact versioned generator/solver/validator/analyzer boundaries.
+6. The renderer payload and hidden-information policy.
+7. Replay reconstruction and historical version retention.
+8. Migration or retirement of the legacy grid maze and current line prototype.
+
+No React, CSS, gameplay, API, database migration, or backend implementation was added during Phase 1.
+
+#### Sprint 6 Phase 2: Maze Arena Architecture And Games Platform
+
+Status: **APPROVED**
+
+Implementation status: **SPRINT 6 NOT STARTED**
+
+Phase 1 is approved. Phase 2 defines the Games Platform and Maze Arena plugin architecture only. It does not authorize gameplay implementation, database migrations, API changes, frontend work, or modifications to frozen Sprint 1 through Sprint 5 code.
+
+##### Architectural Decision
+
+Skill Arena has two distinct layers:
+
+```text
+Frozen Platform Services
+  Identity + Arena Hub + Financial Platform + Admin CRM + Realtime Arena
+                                  |
+                                  v
+                         Games Platform Registry
+                                  |
+                 +----------------+----------------+
+                 |                |                |
+                 v                v                v
+             Maze Arena       Future Game     Future Game
+```
+
+The frozen platform owns players, money, operations, transport, sessions, matchmaking, presence, event storage, and infrastructure.
+
+The Games Platform owns the contract through which a registered game receives authoritative contexts and returns deterministic game transitions.
+
+Each game owns only its rules, state, actions, outcomes, replay codec, and renderer data.
+
+Maze Arena is Game 1. It is not a special case in Realtime Arena.
+
+##### Design Principles
+
+1. Realtime Arena knows a match's `gameId`, not the game's rules.
+2. Realtime Arena resolves a game through the registry.
+3. A game receives authenticated, server-built context and generic action envelopes.
+4. A game returns deterministic state transitions and domain events.
+5. A game never calls wallet, payment, progression, tournament, trust, notification, or admin repositories directly.
+6. Platform services consume emitted events and apply platform policy.
+7. Client state is never authoritative.
+8. Every stored match identifies the exact game, rules, protocol, replay, generator, solver, validator, difficulty, canonical encoding, and renderer versions used.
+9. Versioned historical behavior is immutable.
+10. A future game must be addable without Maze-specific or game-specific changes to Realtime Arena.
+
+##### Target Folder Structure
+
+The logical production structure is:
+
+```text
+backend/
+  internal/
+    arena/                         # Frozen Sprint 5 platform contracts
+      core/
+      events/
+      registry/
+      sdk/
+      security/
+    realtime/                      # Frozen generic transport and lifecycle
+    games/                         # Games Platform
+      registry/
+        catalog.go                 # Game factories and version resolution
+        bootstrap.go               # Composition-root registration
+        compatibility.go           # Version compatibility checks
+      interfaces/
+        module.go                  # Runtime game contract
+        context.go                 # Match/action/viewer contexts
+        action.go                  # Generic action/result envelopes
+        state.go                   # Opaque game state and transitions
+        snapshot.go                # Player/spectator snapshot contracts
+        replay.go                  # Game replay codec contract
+        renderer.go                # Renderer payload contract
+        versions.go                # Complete version tuple
+      shared/
+        canonical.go               # Canonical serialization and hashing
+        errors.go                  # Stable generic game errors
+        testkit/                   # Contract tests for every module
+      maze/
+        module.json
+        module.go                  # Registry adapter only
+        domain/
+          arrow.go
+          board.go
+          state.go
+          action.go
+          outcome.go
+        puzzle/
+          service.go
+          generator.go
+          solver.go
+          validator.go
+          analyzer.go
+          profile.go
+          seed.go
+          hashes.go
+          repository.go
+          tutorial.go
+        replay/
+          codec.go
+          verifier.go
+        renderer/
+          payload.go
+        fixtures/
+        tests/
+
+frontend/
+  app/
+    games/
+      registry/
+      interfaces/
+      shared/
+      maze/
+        renderer/
+        camera/
+        animation/
+        audio/
+        accessibility/
+```
+
+This is a target design, not an instruction to move frozen files during Phase 2.
+
+`backend/internal/arena` remains the frozen platform boundary. `backend/internal/games/interfaces` will be an additive game-runtime contract with a compatibility adapter to the existing `arena/core.GameModule`; it must not become a competing transport or session system.
+
+`shared` is limited to game-neutral codecs, errors, and contract-test utilities. Maze geometry, puzzle algorithms, collision rules, and scoring must remain under `games/maze`.
+
+Go modules are registered explicitly at the application composition root. Skill Arena will not use unsafe runtime-loaded Go plugins or scan arbitrary executable code from the filesystem. "Loaded through the registry" means Realtime Arena resolves a registered factory by `gameId` and version instead of importing or switching on Maze.
+
+##### Registry Architecture
+
+The registry stores factories and immutable descriptors, not active match state.
+
+Each registration declares:
+
+- Game ID.
+- Game version.
+- Rules version.
+- Protocol version.
+- Replay version.
+- Renderer schema version.
+- Supported modes.
+- Capability flags.
+- Minimum and maximum players.
+- Compatibility tuple.
+- Module factory.
+- Manifest hash.
+
+Registry behavior:
+
+1. Application bootstrap registers approved modules.
+2. Registry validates every manifest and version tuple.
+3. Duplicate game ID plus game version registrations fail startup.
+4. A match pins the exact registered version when it is created.
+5. Reconnect and replay resolve the pinned version, never `latest`.
+6. A retired version may reject new matches while remaining available for historical replay.
+7. Missing historical versions place a replay under integrity review; the system must not silently substitute another version.
+
+Realtime Arena receives the registry as a dependency. It may call `Resolve(gameId, gameVersion)` but must not import `games/maze`.
+
+Adding Sudoku, Chess, Memory, or another game requires:
+
+- A new module folder.
+- A valid manifest.
+- An approved registry registration.
+- Passing the generic module contract suite.
+- No Maze or Realtime Arena changes.
+
+##### Generic Runtime Game Interface
+
+The existing frozen `arena/core.GameModule` remains supported. Phase 3 may add an adapter to the following conceptual runtime contract without removing or changing existing public methods:
+
+```text
+RuntimeGame
+  Descriptor()
+  InitializeMatch(context, match request) -> initial match state
+  InitializeParticipant(context, initial match state) -> participant state
+  GenerateState(context, generation request) -> generated state reference
+  ValidateAction(context, participant state, action) -> validation result
+  ApplyAction(context, participant state, validated action) -> transition
+  Snapshot(context, state, viewer) -> renderer snapshot
+  Completion(context, state) -> completion result
+  DetermineWinner(context, match states) -> outcome
+  SerializeReplay(context, replay source) -> game replay metadata
+  RestoreReplay(context, replay metadata, events) -> reconstructed state
+  Cleanup(context, match reference) -> cleanup instructions
+```
+
+The interface uses opaque, versioned game payloads. Generic platform packages must not add `MazeCells`, `ArrowLine`, `ArrowClick`, or other game-specific fields.
+
+Required generic data types:
+
+| Contract | Purpose |
+|---|---|
+| `MatchContext` | Authenticated match identity, mode, participants, versions, server clock, region, and approved configuration |
+| `ParticipantContext` | Authenticated participant, trust/eligibility summary, reconnect state, and viewer role |
+| `ActionEnvelope` | Action ID, match ID, kind, opaque payload, client sequence, expected state version, and telemetry time |
+| `ActionContext` | Server-derived actor, participant, server receipt time, latency, current sequence, and current state version |
+| `GameState` | Opaque versioned authoritative state owned by the game module |
+| `Transition` | Accepted/rejected result, next state, events, progress, completion, and snapshot invalidation |
+| `ViewerContext` | Player, opponent, spectator, replay viewer, support reviewer, or integrity verifier |
+| `RendererSnapshot` | Versioned client-safe presentation data |
+| `CompletionResult` | Complete, incomplete, timeout, forfeit, invalid, or review state |
+| `MatchOutcome` | Winner, loser, draw, cancelled, invalidated, or unresolved |
+
+Interface rules:
+
+- `ValidateAction` must not mutate state.
+- `ApplyAction` receives only a validated action and returns a new state/version.
+- A rejected action does not advance game state but is still journaled.
+- `Snapshot` must enforce viewer visibility and may not expose private opponent state.
+- `DetermineWinner` uses only authoritative participant states and server time.
+- `Cleanup` returns instructions; games do not delete platform records directly.
+- Game methods must honor context cancellation and bounded deadlines.
+- Methods must be deterministic for the same state, action, versions, and authoritative time inputs.
+
+##### Maze Plugin Responsibilities
+
+Maze Arena implements:
+
+- Cell-based arrow-board generation.
+- Maze seed interpretation.
+- Maze Difficulty Profile interpretation.
+- Geometry validation.
+- Solver and measured difficulty analysis.
+- Arrow-click validation.
+- Collision and nearest-blocker calculation.
+- Participant board transitions.
+- Maze progress and combo calculation.
+- Maze completion and Maze scoring inputs.
+- Maze-specific replay event encoding and verification.
+- Maze renderer snapshots.
+
+Maze Arena does not implement:
+
+- Authentication.
+- Matchmaking.
+- Queueing.
+- WebSocket negotiation.
+- Connection ownership.
+- Presence.
+- Heartbeats.
+- Reconnect windows.
+- Generic event persistence.
+- Generic snapshots or replay object storage.
+- Wallet locking or settlement.
+- Rewards, XP, trust, houses, leaderboards, seasons, or tournaments.
+- Admin review screens.
+
+Maze emits events such as `maze.action.accepted`, `maze.action.blocked`, `maze.completed`, and `maze.score.inputs.ready`. Platform consumers decide progression, rewards, notifications, ranking, and settlement.
+
+##### Production Puzzle Service
+
+The Puzzle Service is a Maze-owned domain service behind game-neutral storage and hashing primitives.
+
+Pipeline:
+
+```text
+Generation request
+  -> Resolve immutable version tuple
+  -> Create cryptographically secure seed
+  -> Claim generation nonce
+  -> Generate candidate outside global locks
+  -> Solve independently
+  -> Validate geometry and solution
+  -> Analyze measured difficulty
+  -> Compare measured output with requested profile
+  -> Canonically serialize hash inputs
+  -> Calculate puzzle, generation, and validation hashes
+  -> Claim uniqueness
+  -> Persist immutable metadata
+  -> Assign to match/session
+  -> Return renderer-safe generated state
+```
+
+Required inputs:
+
+- Game ID and version.
+- Rules version.
+- Mode and purpose.
+- Match or session identity.
+- Participant identity only when the mode is not shared.
+- Requested Difficulty Profile.
+- Generator, solver, validator, analyzer, and canonical encoding versions.
+- Server-generated cryptographic seed or seed reference.
+- Server-generated nonce.
+
+Required outputs:
+
+- Puzzle ID.
+- Puzzle hash.
+- Generation hash.
+- Validation hash.
+- Seed reference.
+- Requested Difficulty Profile ID.
+- Measured Difficulty Analysis ID.
+- Minimum successful actions.
+- Expected solve-time distribution.
+- Version tuple.
+- Validation result.
+- Renderer state.
+
+Generation, solving, validation, analysis, hashing, and replay reconstruction are CPU work. They must execute outside global store/database locks. Database transactions should cover only reservations, uniqueness claims, assignments, and state updates.
+
+The service fails closed:
+
+- An unsolvable candidate is rejected.
+- A difficulty mismatch is rejected.
+- A duplicate puzzle hash in a one-use mode is rejected.
+- A geometry or version mismatch is rejected.
+- A timeout does not reduce complexity or substitute an easier fallback.
+- An unavailable generator version does not fall back to `latest`.
+- The escape-only fallback in the current prototype is not permitted in production.
+
+##### Generator Architecture
+
+Maze generation uses integer grid coordinates and immutable ordered arrow geometry.
+
+Canonical arrow:
+
+```text
+Arrow
+  ID
+  Ordered cells: tail -> head
+  Direction: right | up | left | down
+```
+
+Generator stages:
+
+1. Resolve requested board bounds and Difficulty Profile.
+2. Create pattern and cluster inputs from the profile.
+3. Construct candidate arrows in reverse dependency-safe order or through another approved deterministic strategy.
+4. Enforce cell uniqueness and orthogonal continuity.
+5. Enforce final-segment and arrow-direction alignment.
+6. Derive collision dependencies from geometry.
+7. Solve the candidate independently.
+8. Analyze actual difficulty.
+9. Accept only when all hard constraints and tolerance bands pass.
+
+Pattern bias may include braid, spiral, mosaic, piton, diagonal, rings, maze rows, rays, or future versioned patterns. A pattern changes generation preference, not collision rules.
+
+The production generator does not expose:
+
+- A permanent post-tutorial level catalogue.
+- Public seed formulas.
+- Client-selectable generation flags.
+- A client-selected difficulty.
+- A fallback board that bypasses validation.
+
+##### Tutorial And Progression Rule
+
+Tutorial boards 1 through 5 may remain handcrafted because they are teaching fixtures, not competitive live puzzles.
+
+Tutorial requirements:
+
+- Each board has an immutable fixture ID.
+- Geometry, rules, expected action sequence, and renderer version are versioned.
+- Fixtures pass the same validator used for generated puzzles.
+- Tutorial results do not masquerade as unique competitive puzzles.
+
+After the five tutorial fixtures, every Practice, House, Ranked, PvP, and Tournament board is generated.
+
+The frontend may display a progression label such as "Level 15." Internally, that label maps to a Difficulty Profile request. There is no canonical production `Level 15` board.
+
+##### Permanent Puzzle Uniqueness Rules
+
+Puzzle uniqueness is enforced by persisted claims and canonical hashes.
+
+| Mode | Generation and reuse policy |
+|---|---|
+| Tutorial | Approved fixture reuse is allowed |
+| Practice | Fresh puzzle for every participant session |
+| Training | Fresh unless the product explicitly selects a versioned lesson fixture |
+| House Challenge | Fresh puzzle for every challenge attempt |
+| PvP/Ranked | One fresh puzzle for the match; identical initial puzzle for both participants |
+| Tournament | One fresh puzzle per tournament match; identical initial puzzle for that match's participants |
+| Daily Challenge | One versioned shared puzzle for the approved daily challenge window |
+| Replay | Reconstruct the existing puzzle; never create a new uniqueness claim |
+
+PvP flow:
+
+```text
+Match created
+  -> One puzzle generated and validated
+  -> One puzzle assignment linked to the match
+  -> Player A gets participant state A
+  -> Player B gets participant state B
+  -> Both states reference identical immutable puzzle metadata
+  -> Actions mutate only the actor's participant state
+```
+
+One-use means the puzzle hash cannot be assigned to a second one-use match or session. A repeated seed is also rejected for one-use generation. Tutorial and shared scheduled challenges use explicit reuse policies and cannot accidentally enter one-use queues.
+
+Puzzle uniqueness is not delegated to random probability. It is enforced by a database uniqueness claim over the canonical puzzle hash and by mode-aware assignment constraints.
+
+Seed policy:
+
+- Generate seed material with a cryptographically secure random source.
+- Keep active-match seed material server-side or encrypted at rest.
+- Send renderer geometry, puzzle identity, and required public metadata to clients.
+- Do not expose a seed during a live match if it enables local solution generation.
+- Include the replay seed or approved seed reference after the match according to replay visibility policy.
+- Store a seed hash for uniqueness and auditing.
+
+##### Difficulty Profile Architecture
+
+Difficulty has two records:
+
+1. **Requested Difficulty Profile**: the authoritative generation target.
+2. **Measured Difficulty Analysis**: what the generated board actually contains.
+
+They must never be treated as the same value.
+
+Requested Difficulty Profile:
+
+| Field | Meaning |
+|---|---|
+| Profile schema version | Immutable interpretation of all fields |
+| Complexity score | Unbounded progression input |
+| Rating band | Player-facing or matchmaking calibration band |
+| Line count | Target arrow-count range |
+| Dependency depth | Target longest dependency-chain range |
+| Branching | Target available-choice and dependency-branch ranges |
+| False routes | Target tempting-but-currently-blocked choice ratio; never fake graphics or false rules |
+| Density | Target occupied-cell ratio |
+| Pattern bias | Weighted versioned pattern preferences |
+| Expected solve time | Target percentile distribution |
+| Visual complexity | Readability constraints, route length, turns, crowding, and minimum on-screen scale |
+| Direction balance | Allowed directional distribution |
+| Path-length profile | Short, medium, and long-arrow target ranges |
+| Source | Practice, league, season, house, ranked, or tournament policy |
+
+Measured Difficulty Analysis:
+
+- Actual arrow and occupied-cell counts.
+- Actual density.
+- Dependency edge count.
+- Longest dependency depth.
+- Branching distribution.
+- Initial and per-wave open choices.
+- Cross-dependency count.
+- Blocked-choice ratio.
+- Path-length and turn distributions.
+- Direction distribution.
+- Visual crowding/readability score.
+- Minimum successful actions.
+- Solver work factor.
+- Expected top 1%, top 10%, median, and average solve times.
+- Analyzer confidence.
+- Acceptance/rejection reasons.
+
+Candidate acceptance requires every hard safety rule plus configured tolerance between requested and measured values. Difficulty cannot change because of server load, lock contention, queue length, or generation timeout.
+
+##### Authoritative Collision Model
+
+Decision: **Use integer cell-occupancy collision as the only authoritative Maze rule.**
+
+The current prototype's declared `DependsOn` values may be retained temporarily as diagnostics or generation hints, but they are not authority.
+
+Canonical collision:
+
+1. Read the arrow's immutable head cell and direction.
+2. Step one integer cell at a time toward the board edge.
+3. Ignore removed arrows.
+4. The first occupied cell belonging to another live arrow is the nearest blocker.
+5. If a blocker exists, reject the action and leave game state unchanged.
+6. If no blocker exists, mark the arrow removed in the actor's state.
+7. Recalculate derived availability from the new live occupancy.
+8. Complete only when every arrow is removed.
+
+Why this model is authoritative:
+
+- It matches the approved reference mechanic.
+- Integer geometry avoids floating-point intersection ambiguity.
+- Generation, solver, validator, action handling, replay, and rendering can share one rules definition.
+- The nearest blocker and distance are deterministic, enabling instructional blocked animation.
+- Dependencies cannot drift away from geometry.
+- It supports canonical hashing and cross-language fixtures.
+
+Derived dependency graph:
+
+- May be calculated for solver, difficulty, hints, analytics, and replay explanation.
+- Must always be derived from geometry plus live state.
+- Must never override collision results.
+- Must be invalidated or recalculated after state changes.
+
+Visual stroke thickness, glow, shadows, and anti-aliasing do not change collision. Collision uses occupied logical cells only.
+
+##### Generic Action Protocol
+
+Realtime Arena transports generic game actions. It does not understand Maze payloads.
+
+Conceptual client envelope:
+
+```json
+{
+  "type": "game.action",
+  "matchId": "mat_...",
+  "actionId": "act_...",
+  "sequence": 17,
+  "expectedStateVersion": 12,
+  "clientSentAt": "2026-07-28T12:00:00Z",
+  "action": {
+    "kind": "arrow.click",
+    "payload": {
+      "arrowId": "arrow_23"
+    }
+  }
+}
+```
+
+Only the Maze module interprets `arrow.click` and `arrowId`. The client does not send direction, collision result, blocker, completion, combo, score, winner, seed, difficulty, or resulting state.
+
+Generic dispatch:
+
+```text
+Authenticated gateway
+  -> Validate envelope size and protocol
+  -> Resolve participant and match
+  -> Enforce action ID idempotency
+  -> Enforce participant sequence and expected state version
+  -> Resolve registered game module
+  -> Build server ActionContext
+  -> Validate game action
+  -> Apply transition under match/participant concurrency control
+  -> Persist action receipt, state, and hash-chained events atomically
+  -> Emit client-safe result and snapshots
+```
+
+Conceptual result:
+
+```json
+{
+  "type": "game.action.result",
+  "matchId": "mat_...",
+  "actionId": "act_...",
+  "sequence": 104,
+  "stateVersion": 13,
+  "accepted": false,
+  "code": "ACTION_BLOCKED",
+  "events": [],
+  "presentation": {}
+}
+```
+
+For a blocked Maze action, `presentation` may include a client-safe blocker reference and collision distance so the renderer can animate impact and return. That metadata explains an authoritative result; it does not grant authority to the renderer.
+
+Protocol controls:
+
+- One globally unique action ID per submitted intent.
+- Unique participant client sequence within a match.
+- Monotonic server event sequence.
+- Optimistic state-version check.
+- Duplicate action returns the original result.
+- Sequence gap requests synchronization.
+- Stale state returns a stable conflict code and snapshot reference.
+- Actions after completion, timeout, leave, or forfeit are rejected.
+- Client timestamps are telemetry only.
+- Payloads are size-limited and schema-validated by the selected game version.
+- Per-player and per-match action rates are enforced server-side.
+
+Adding `game.action` to the frozen gateway is permitted only in a later approved implementation phase as generic, backward-compatible integration support. No Maze fields may be added to the gateway's generic message type.
+
+##### State And Concurrency Model
+
+Every match has immutable shared puzzle metadata and separate mutable participant states.
+
+Maze participant state contains conceptually:
+
+- Match and participant references.
+- Puzzle ID and puzzle hash.
+- State schema version.
+- State version.
+- Removed-arrow bitset or canonical removed IDs.
+- Successful action count.
+- Blocked action count.
+- Current combo and maximum combo.
+- Completion percentage.
+- Completion status.
+- Started and completed server timestamps.
+- Last accepted participant sequence.
+- State checksum.
+
+State transition rules:
+
+- Apply actions under a per-match/per-participant distributed lock or an atomic compare-and-swap on state version.
+- Never hold a global store lock during generation, solving, validation, analysis, or replay reconstruction.
+- Persist participant state update, action receipt, and realtime events in one database transaction.
+- Opponent state is independent and cannot be mutated by the actor's transaction.
+- Reconnect reconstructs from the latest checksum-verified snapshot plus later events.
+- A hash or state-version mismatch fails closed and requests recovery/review.
+
+##### Replay Architecture
+
+The generic Realtime Arena continues to own event persistence, object storage, root hashing, signatures, and replay delivery.
+
+Maze owns the interpretation and deterministic reconstruction of Maze events.
+
+Canonical Maze replay metadata:
+
+- Replay ID and match ID.
+- Game, rules, protocol, replay, renderer, and canonical encoding versions.
+- Generator, solver, validator, analyzer, and Difficulty Profile schema versions.
+- Puzzle ID.
+- Seed or approved encrypted seed reference.
+- Seed hash.
+- Requested Difficulty Profile hash.
+- Measured Difficulty Analysis hash.
+- Generation hash.
+- Puzzle hash.
+- Validation hash.
+- Ordered authoritative action event range.
+- Server timing.
+- Participant completion states.
+- Winner/draw/invalid outcome.
+- Event root hash.
+- Replay hash.
+- Platform signature and signing key ID.
+
+The replay does not store a full maze as canonical state when deterministic reconstruction is possible.
+
+Replay verification:
+
+```text
+Resolve exact historical versions
+  -> Load seed and profile
+  -> Regenerate candidate
+  -> Recalculate generation and puzzle hashes
+  -> Re-run validator and compare validation hash
+  -> Start independent participant states
+  -> Apply ordered authoritative events
+  -> Compare state checksums and completion
+  -> Recalculate outcome and replay hash
+  -> Verify event root and platform signature
+```
+
+Optional generated geometry may exist as a temporary cache or dispute artifact, but it is never replay authority and must be checksum-linked to the canonical puzzle hash.
+
+Historical generator artifacts and canonical encoders must be retained for the platform's replay-retention period. A generator version may be disabled for new matches without being deleted.
+
+##### Hash Architecture
+
+All hashes use a versioned canonical serialization. Raw language-specific JSON map ordering is not an approved canonical format.
+
+| Hash | Canonical inputs |
+|---|---|
+| Seed hash | Secret seed bytes plus seed-format version |
+| Difficulty Profile hash | Canonical requested profile plus profile schema version |
+| Generation hash | Game ID, generator version, seed hash, profile hash, generation parameters, and canonical encoding version |
+| Puzzle hash | Canonical immutable board geometry plus rules version |
+| Validation hash | Puzzle hash, solver/validator versions, canonical solution hash, dependency analysis, and validation result |
+| State checksum | Puzzle hash, participant state schema/version, removed IDs, progress, and last event sequence |
+| Event integrity hash | Previous event hash, authoritative event envelope, server sequence, and state version |
+| Replay hash | Version tuple, puzzle/validation hashes, participant event roots, timing, and outcome |
+
+HMAC or digital signatures protect authenticity. Plain hashes provide identity and integrity comparison but are not signatures.
+
+##### Database Design
+
+Phase 3 may add normalized PostgreSQL structures through a new additive migration. Phase 2 defines the logical model only.
+
+Existing frozen tables remain:
+
+- `game_modules`.
+- `realtime_matches`.
+- `realtime_participants`.
+- `realtime_events`.
+- `realtime_snapshots`.
+- `realtime_replays`.
+
+Proposed logical tables:
+
+###### `game_module_versions`
+
+- `game_id`.
+- `game_version`.
+- `rules_version`.
+- `protocol_version`.
+- `replay_version`.
+- `renderer_version`.
+- `manifest_hash`.
+- `artifact_digest`.
+- `status`: active, replay_only, retired, revoked.
+- `new_match_allowed`.
+- `released_at`.
+- `retired_at`.
+
+Primary identity: game ID plus complete version tuple.
+
+###### `game_generator_versions`
+
+- `game_id`.
+- `generator_version`.
+- `solver_version`.
+- `validator_version`.
+- `analyzer_version`.
+- `difficulty_profile_version`.
+- `canonical_encoding_version`.
+- `artifact_digest`.
+- `determinism_fixture_hash`.
+- `status`.
+- `released_at`.
+- `retired_at`.
+
+Versions are immutable after use.
+
+###### `game_difficulty_profiles`
+
+- `id`.
+- `game_id`.
+- `schema_version`.
+- `source`.
+- Canonical profile data.
+- `profile_hash`.
+- `created_at`.
+
+Profile hashes are unique per game and schema version.
+
+###### `game_difficulty_analyses`
+
+- `id`.
+- `puzzle_id`.
+- `analyzer_version`.
+- Measured analysis data.
+- `analysis_hash`.
+- `accepted`.
+- Rejection reasons.
+- `created_at`.
+
+###### `game_puzzles`
+
+- `id`.
+- `game_id`.
+- `mode`.
+- `seed_ciphertext` or secret-manager reference.
+- `seed_hash`.
+- `generation_nonce`.
+- `generation_hash`.
+- `puzzle_hash`.
+- `validation_hash`.
+- `difficulty_profile_id`.
+- `difficulty_analysis_id`.
+- Complete immutable version references.
+- `solution_hash`.
+- `minimum_actions`.
+- `status`: generating, validated, rejected, assigned, consumed, retired.
+- `created_at`.
+- `validated_at`.
+
+Canonical geometry is regenerated from versions, seed, and profile. It is not required as an authoritative database column.
+
+###### `game_puzzle_uniqueness_claims`
+
+- `puzzle_hash`.
+- `seed_hash`.
+- `puzzle_id`.
+- `reuse_policy`.
+- `first_scope_type`.
+- `first_scope_id`.
+- `claimed_at`.
+
+One-use puzzle hashes and seeds receive exclusive claims. Approved reusable tutorial/daily fixtures use explicit non-one-use policies.
+
+###### `game_puzzle_assignments`
+
+- `id`.
+- `puzzle_id`.
+- `scope_type`: tutorial, session, match, house_attempt, daily_challenge.
+- `scope_id`.
+- `mode`.
+- `reuse_policy`.
+- `assigned_at`.
+- `consumed_at`.
+
+A PvP match has one assignment and two participant states.
+
+###### `game_participant_states`
+
+- `match_id`.
+- `user_id`.
+- `game_id`.
+- `state_schema_version`.
+- `state_version`.
+- Opaque canonical state data.
+- `state_checksum`.
+- `last_client_sequence`.
+- `last_server_sequence`.
+- `status`.
+- `updated_at`.
+
+Primary identity: match ID plus user ID.
+
+###### `game_action_receipts`
+
+- `action_id`.
+- `match_id`.
+- `user_id`.
+- `client_sequence`.
+- `expected_state_version`.
+- `action_kind`.
+- Canonical action payload.
+- `accepted`.
+- Stable result code.
+- `state_version_before`.
+- `state_version_after`.
+- First and last emitted realtime event sequences.
+- `server_received_at`.
+- `processed_at`.
+- `receipt_hash`.
+
+Unique constraints:
+
+- Action ID.
+- Match ID plus user ID plus client sequence.
+
+###### `game_replay_metadata`
+
+One-to-one companion to `realtime_replays`:
+
+- `replay_id`.
+- `puzzle_id`.
+- Generator, solver, validator, analyzer, difficulty, renderer, and canonical encoding versions.
+- Seed reference and seed hash.
+- Difficulty Profile and analysis hashes.
+- Generation, puzzle, validation, and replay hashes.
+- Winner/draw/invalid outcome.
+- Signing key ID.
+- Verification status and timestamp.
+
+No separate Maze event store is introduced. Ordered game events remain in `realtime_events`.
+
+Database invariants:
+
+- Puzzle versions and hashes are immutable after validation.
+- One-use uniqueness claims are exclusive.
+- One puzzle assignment per PvP/tournament match.
+- Separate participant states per player.
+- Action idempotency and participant sequence uniqueness.
+- State version increases monotonically.
+- Replays reference completed or explicitly invalidated matches.
+- Historical version rows cannot be deleted while referenced.
+- Foreign keys use restrictive deletion for integrity evidence.
+- Seed plaintext never appears in logs, API errors, analytics, or client-visible active-match payloads.
+
+##### Version Compatibility
+
+The complete compatibility tuple is:
+
+```text
+game version
+rules version
+protocol version
+replay version
+renderer schema version
+generator version
+solver version
+validator version
+analyzer version
+difficulty profile schema version
+state schema version
+canonical encoding version
+```
+
+Compatibility rules:
+
+- New matches use one approved complete tuple.
+- Match state, actions, snapshots, and replay metadata pin that tuple.
+- Versions are append-only; behavior is not changed in place.
+- Patch versions may be declared compatible only through tested manifest metadata.
+- Rules or canonical encoding changes require explicit new versions.
+- Replays always resolve exact versions.
+- Renderer clients declare supported renderer schemas.
+- If a client cannot render the pinned schema, the server rejects entry or uses an explicitly versioned approved transformer.
+- No silent fallback, implicit upgrade, or `latest` substitution.
+- Revoked versions remain available to integrity staff where legally and operationally safe, but cannot start new matches.
+
+Required compatibility tests:
+
+- Same seed/profile/version produces byte-identical canonical geometry.
+- Server and renderer fixtures agree on arrow IDs, cells, and directions.
+- Historical replay reconstructs to the same final checksums.
+- Old action payloads remain readable by their pinned protocol version.
+- Unsupported combinations fail startup or match creation.
+
+##### Rendering Boundary
+
+Client-side only:
+
+- Canvas/WebGL/DOM rendering.
+- Camera, zoom, pan, resize, and coordinate transforms.
+- Pointer, touch, keyboard, and accessible input mapping to an arrow ID.
+- Press, hover, focus, and pending-response states.
+- Correct-exit animation after server acceptance.
+- Blocked impact and return animation after server rejection.
+- Particle effects, sound, haptics, glow, highlighting, and reduced motion.
+- Interpolation between authoritative snapshots.
+- Display of server-provided clock, progress, combo, status, and result.
+
+Server-authoritative:
+
+- Puzzle generation and identity.
+- Direction and geometry.
+- Live occupancy.
+- Collision and blocker.
+- Action acceptance.
+- Removed state.
+- Progress and combo.
+- Timer and timeout.
+- Completion and score inputs.
+- Winner, draw, forfeit, and invalidation.
+- Replay and integrity.
+
+Renderer snapshot views:
+
+| Viewer | Allowed data |
+|---|---|
+| Player | Own complete renderable board, own progress, approved public opponent progress |
+| Opponent | Never receives the other player's hidden action history or mutable board state |
+| Spectator | Approved delayed/public state only |
+| Replay viewer | Post-match state according to replay visibility rules |
+| Support reviewer | Required dispute evidence under RBAC |
+| Integrity verifier | Full authoritative reconstruction inputs under privileged service identity |
+
+Animation state is presentation state. It may lag authoritative state briefly, but it cannot affect validation. If a sync conflicts with local animation, the renderer cancels or reconciles the animation and displays the server snapshot.
+
+##### Error Contract
+
+Generic stable result codes:
+
+- `GAME_NOT_REGISTERED`.
+- `GAME_VERSION_UNAVAILABLE`.
+- `GAME_ACTION_UNSUPPORTED`.
+- `ACTION_DUPLICATE`.
+- `ACTION_OUT_OF_ORDER`.
+- `STATE_VERSION_CONFLICT`.
+- `MATCH_NOT_LIVE`.
+- `MATCH_ALREADY_COMPLETE`.
+- `PARTICIPANT_NOT_FOUND`.
+- `GAME_STATE_INVALID`.
+- `GAME_PROCESSING_UNAVAILABLE`.
+
+Maze-specific stable result codes:
+
+- `ARROW_NOT_FOUND`.
+- `ARROW_ALREADY_REMOVED`.
+- `ACTION_BLOCKED`.
+- `PUZZLE_STATE_INVALID`.
+
+Errors do not reveal hidden opponent state, secret seeds, solution order, internal stack traces, or sensitive integrity data.
+
+##### Observability And Operational Boundaries
+
+Games emit structured metrics through platform observability:
+
+- Generation attempts, acceptance rate, and duration.
+- Solver, validator, analyzer, and replay reconstruction duration.
+- Rejection reasons.
+- Duplicate puzzle candidates.
+- Difficulty requested-versus-measured variance.
+- Actions accepted, blocked, duplicate, stale, and out of order.
+- State-version conflicts.
+- Replay verification success and failure.
+- Per-version error and latency rates.
+
+Games do not create their own logging, tracing, alerting, worker, or queue infrastructure. They use the frozen platform facilities and include game/version/match correlation fields.
+
+##### Phase 2 Decisions
+
+| Decision | Approved architecture |
+|---|---|
+| Games Platform | Registry-driven plugin layer above frozen Arena/Realtime services |
+| Folder structure | `games/registry`, `games/interfaces`, `games/shared`, and one folder per game |
+| Generic game interface | Opaque state, generic actions, deterministic transitions, viewer-safe snapshots, replay codec |
+| Maze rules | Integer cell-occupancy arrow escape |
+| Dependencies | Derived from geometry; never separate authority |
+| Puzzle generation | Server-only, versioned pipeline outside global locks |
+| Fixed levels | Tutorial 1-5 only; no baked production catalogue |
+| Practice | Fresh one-use puzzle per participant session |
+| House | Fresh one-use puzzle per attempt |
+| PvP/Ranked | One fresh shared puzzle per match, independent player states |
+| Tournament | One fresh shared puzzle per tournament match |
+| Difficulty | Requested profile plus independently measured analysis |
+| Replay | Exact-version seed reconstruction plus authoritative events and signatures |
+| Storage | Normalized metadata, uniqueness claims, participant states, action receipts, existing realtime event stream |
+| Networking | Generic Realtime Arena action envelope only |
+| Rendering | Client presentation only; no gameplay authority |
+| Versioning | Complete immutable compatibility tuple; no silent fallback |
+
+##### Phase 2 Definition Of Done
+
+Documentation deliverables are complete:
+
+- Games Platform architecture.
+- Registry and folder structure.
+- Generic runtime game interface.
+- Maze plugin ownership.
+- Production Puzzle Service design.
+- Generator architecture.
+- Tutorial and fixed-level policy.
+- Permanent uniqueness rules.
+- Requested and measured difficulty architecture.
+- Authoritative collision decision.
+- Generic action protocol.
+- State and concurrency model.
+- Replay and hash architecture.
+- PostgreSQL logical model.
+- Version compatibility rules.
+- Rendering boundary.
+- Error and observability contracts.
+
+No production gameplay code, migration, API, React component, CSS, or frozen Sprint 1 through Sprint 5 implementation was changed during Phase 2.
+
+Phase 2 is **APPROVED**.
+
+Sprint 6 implementation remains **NOT STARTED**.
+
+Phase 3 may define the Puzzle Generator and Solver. Production implementation remains prohibited until the design phases are approved.
+
+#### Sprint 6 Phase 3: Puzzle Generator And Solver Design
+
+Status: **APPROVED**
+
+Implementation status: **SPRINT 6 NOT STARTED**
+
+Phase 2 is approved. Phase 3 finalizes the production Maze puzzle generator, solver, validator, difficulty calibration, hashing, uniqueness, and performance design. It does not implement these systems.
+
+##### Permanent Puzzle Generation Contract
+
+These rules are permanent platform requirements:
+
+1. Tutorial puzzles 1 through 5 may be handcrafted and versioned.
+2. Every non-tutorial puzzle is generated by the server.
+3. Every live PvP or Ranked match receives exactly one newly generated puzzle.
+4. Both participants in that match receive identical immutable puzzle geometry and metadata.
+5. Each participant receives independent mutable board state.
+6. Practice receives a newly generated puzzle for every session.
+7. House Challenge receives a newly generated puzzle for every attempt.
+8. Tournament puzzles are generated specifically for each tournament match.
+9. Daily Challenge may intentionally share one approved puzzle during its challenge window.
+10. Generation uses an immutable Generator Version, requested Difficulty Profile, and cryptographically secure seed.
+11. The database prevents a one-use puzzle from being intentionally assigned again.
+12. Replays reconstruct puzzles from exact generator metadata whenever deterministic reconstruction is possible.
+13. Full layouts are not canonical replay storage.
+14. No client may choose or submit the live seed, Difficulty Profile, puzzle, solution, or generation result.
+15. No invalid, duplicate, deadlocked, or out-of-profile puzzle may reach a player.
+
+##### Generator Objectives
+
+The production generator must:
+
+- Produce deterministic output for identical versioned inputs.
+- Produce a fresh one-use puzzle for modes that require uniqueness.
+- Generate readable orthogonal arrow geometry.
+- Create dependencies through physical collision.
+- Meet an authoritative requested Difficulty Profile within approved tolerances.
+- Produce enough branching and variation to avoid a fixed memorized solution.
+- Pass an independent solver and validator.
+- Avoid runtime, map-order, floating-point, clock, thread-scheduling, or platform-dependent output.
+- Support exact reconstruction years later.
+- Fail closed when it cannot satisfy the contract.
+
+The generator does not decide player progression, matchmaking, rewards, or competition outcomes.
+
+##### Complete Generation Pipeline
+
+```text
+Authoritative generation request
+        |
+        v
+Resolve complete immutable version tuple
+        |
+        v
+Load requested Difficulty Profile
+        |
+        v
+Generate secure seed material
+        |
+        v
+Derive deterministic generator stream
+        |
+        v
+Select pattern inputs
+        |
+        v
+Generate bounded candidate batch
+        |
+        v
+Structural geometry validation
+        |
+        v
+Collision and dependency derivation
+        |
+        v
+Independent solver validation
+        |
+        v
+Gameplay simulation validation
+        |
+        v
+Measured difficulty analysis
+        |
+        v
+Requested-versus-measured verification
+        |
+        v
+Deterministic candidate selection
+        |
+        v
+Canonical puzzle and validation hashes
+        |
+        v
+Transactional database uniqueness claim
+        |
+        v
+Immutable metadata persistence and assignment
+        |
+        v
+Production-ready renderer state
+```
+
+No candidate is delivered before the uniqueness claim and assignment transaction succeeds.
+
+##### Generation Request
+
+The authoritative request contains:
+
+- Request ID and idempotency key.
+- Game ID.
+- Match, session, challenge, or tournament scope.
+- Mode and reuse policy.
+- Complete version tuple.
+- Requested Difficulty Profile ID and hash.
+- Participant ID only for non-shared generation.
+- Server-owned generation policy.
+- Deadline and priority.
+
+The request does not accept client-provided:
+
+- Seed.
+- Pattern.
+- Difficulty values.
+- Candidate count.
+- Puzzle geometry.
+- Solution.
+- Reuse policy.
+- Generator version override.
+
+An internal integrity or developer tool may request explicit test fixtures only under privileged non-production policy and auditable configuration.
+
+##### Seed Strategy
+
+Seed creation uses two layers:
+
+1. A 256-bit random generation secret from the operating system cryptographic random source.
+2. A domain-separated deterministic seed derived from that secret and immutable generation context.
+
+Conceptual derivation:
+
+```text
+random material: CSPRNG(32 bytes)
+
+effective seed:
+  HMAC-SHA-256(
+    generation key,
+    seed format version
+    + random material
+    + game ID
+    + scope type
+    + scope ID
+    + generator version
+    + Difficulty Profile hash
+    + generation nonce
+  )
+```
+
+The production design may use HKDF instead of direct HMAC if the implementation contract specifies the exact algorithm and vectors. The algorithm cannot change without a Seed Format Version change.
+
+Seed requirements:
+
+- At least 256 bits of cryptographically secure random material.
+- Domain separation between Practice, House, PvP, Ranked, Tournament, Daily, and replay fixtures.
+- No derivation from player ID, level, date, match number, or public data alone.
+- No use of `math/rand`, JavaScript `Math.random`, Park-Miller, or another runtime-dependent pseudo-random generator.
+- No live seed in application logs, traces, analytics, error messages, or client payloads.
+- Encrypted seed material or secret-manager reference at rest.
+- Separate non-secret seed hash for uniqueness and auditing.
+- Exact seed format and derivation version stored with the puzzle.
+
+Mode-specific seed rules:
+
+| Mode | Seed scope |
+|---|---|
+| Tutorial | No generated seed required; fixture version is authoritative |
+| Practice | New random material for each player session |
+| Training | New random material unless using an approved lesson fixture |
+| House | New random material for each attempt |
+| PvP/Ranked | One new random seed scoped to the match |
+| Tournament | One new random seed scoped to each tournament match |
+| Daily | One new random seed scoped to the challenge window |
+| Replay | Decrypt/load the original seed; never generate a replacement |
+
+Both PvP participants reference the same puzzle and seed metadata. Their mutable states remain separate.
+
+##### Deterministic Random Stream
+
+The generator must not depend on a language standard-library RNG whose output may change between versions.
+
+Decision: use a specified HMAC-SHA-256 counter stream for deterministic generation.
+
+Conceptual stream:
+
+```text
+block[n] = HMAC-SHA-256(effective_seed, stream_version + domain + uint64_be(n))
+```
+
+Domains separate:
+
+- Pattern selection.
+- Board dimensions.
+- Cluster anchors.
+- Arrow placement.
+- Direction choice.
+- Path growth.
+- Candidate derivation.
+- Tie breaking.
+
+Random integer selection uses rejection sampling to avoid modulo bias. Generator scoring uses integers or explicitly scaled fixed-point values. Generator authority does not use platform-dependent floating-point comparisons.
+
+Required published test vectors:
+
+- Effective seed.
+- Domain.
+- Counter.
+- Expected output block.
+- Expected bounded integer samples.
+- Expected final puzzle hash.
+
+These vectors must pass in every supported implementation language.
+
+##### Generator Versioning
+
+The Generator Version identifies behavior, not merely a release label.
+
+The complete generator identity includes:
+
+- Generator algorithm version.
+- Seed format version.
+- Deterministic stream version.
+- Pattern catalogue version.
+- Pattern selection version.
+- Geometry schema version.
+- Candidate scoring version.
+- Canonical encoding version.
+- Default constraint-policy version.
+
+Versioning rules:
+
+- Output-changing behavior requires a new Generator Version.
+- Pattern weight changes require a new Pattern Selection or Generator Version.
+- Bug fixes that change generated geometry require a new version.
+- Historical versions are immutable.
+- A version can become `replay_only` but cannot be deleted while referenced.
+- Every version stores an artifact digest and determinism fixture hash.
+- New matches never select an unapproved or replay-only version.
+- Replay resolves the exact historical version and refuses silent substitution.
+
+Version qualification requires:
+
+- Determinism fixtures.
+- Cross-platform hash parity.
+- Solver and validator compatibility.
+- Difficulty calibration corpus.
+- Performance profile.
+- Security review.
+- Approved activation record.
+
+##### Candidate Generation
+
+One seed may derive a bounded set of candidate streams:
+
+```text
+candidate_seed[i] =
+  HMAC-SHA-256(effective_seed, "candidate" + uint64_be(i))
+```
+
+Candidate indexes are stable and begin at zero.
+
+Generation may run candidate indexes in parallel, but selection cannot depend on which worker finishes first.
+
+Deterministic selection:
+
+1. Generate a configured fixed candidate batch for the requested profile.
+2. Reject candidates that fail any hard validation.
+3. Rank accepted candidates using an immutable integer scoring tuple:
+   - requested-versus-measured difficulty distance;
+   - readability compliance;
+   - dependency and branching target distance;
+   - pattern-quality score;
+   - candidate index as final tie breaker.
+4. Select the same winning candidate regardless of worker scheduling.
+5. Persist the selected candidate index.
+
+If no candidate passes:
+
+- Mark the generation attempt failed.
+- Record non-sensitive failure reasons and metrics.
+- Do not return an easier or escape-only board.
+- Do not reduce the requested Difficulty Profile.
+- Do not reuse a previous puzzle.
+- Retry with new cryptographic seed material under bounded orchestration policy.
+- Fail the match/session safely when its deadline is exhausted.
+
+##### Board And Arrow Geometry
+
+Canonical board:
+
+- Positive integer width and height.
+- Integer row/column coordinates.
+- Stable coordinate origin and direction encoding.
+- Versioned geometry schema.
+
+Canonical arrow:
+
+- Stable ID derived from canonical placement order.
+- Non-empty ordered cells from tail to head.
+- Four-direction enum: right, up, left, down.
+- Orthogonally adjacent consecutive cells.
+- No repeated cell within the arrow.
+- No cell shared with another arrow.
+- Final body segment aligned with the declared direction.
+- Head within the board.
+- Escape ray evaluated from one cell beyond the head.
+
+Structural rejection conditions:
+
+- Empty board or arrow.
+- Out-of-bounds cell.
+- Duplicate occupied cell.
+- Self-intersection through a repeated cell.
+- Diagonal or disconnected path.
+- Direction outside the versioned enum.
+- Head/direction mismatch.
+- Arrow ID collision.
+- Board above approved readability or memory bounds.
+- Canonical encoding failure.
+
+Visual stroke width, glow, gradients, shadows, and animation do not alter logical geometry.
+
+##### Pattern System
+
+Patterns influence candidate generation but never change rules.
+
+Initial pattern families:
+
+- Braid.
+- Spiral.
+- Maze rows.
+- Rings.
+- Mosaic.
+- Piton.
+- Diagonal weave.
+- Rays.
+
+Each pattern definition contains:
+
+- Pattern ID and version.
+- Eligible difficulty range.
+- Minimum board dimensions.
+- Weighted spatial attractors.
+- Direction and path-length biases.
+- Density and cluster preferences.
+- Readability limits.
+- Compatibility with other secondary pattern influences.
+
+Pattern selection:
+
+1. Filter patterns by requested profile and board constraints.
+2. Calculate integer weights from the immutable Pattern Selection Version.
+3. Select with the pattern-domain deterministic random stream.
+4. Optionally select a bounded secondary influence when the profile permits.
+5. Store selected pattern IDs and versions in generation metadata.
+
+Anti-predictability rules:
+
+- No public level-to-pattern rotation.
+- No fixed seven-level or chapter sequence.
+- No public seed formula.
+- Pattern does not determine a reusable layout.
+- Seed variation changes anchors, routes, dependencies, density, and arrow identity.
+- Pattern metadata need not be exposed during an active match.
+
+Patterns are not player-visible "levels." The player may see a neutral post-match analysis label if product design later approves it.
+
+##### Dependency Creation
+
+Dependencies are created only through physical geometry.
+
+For arrow `A`, every other live arrow occupying a cell on `A`'s directional escape ray is a blocker that must be removed before `A` can escape.
+
+Dependency graph:
+
+- Node: arrow ID.
+- Directed edge `A -> B`: arrow A requires arrow B to be removed.
+- Multiple occupied cells from B on A's ray create one edge.
+- Graph is derived after geometry generation.
+- Graph is never stored as independent authority.
+- Graph may be persisted as hashed analysis evidence or regenerated from geometry.
+
+Generation targets:
+
+- At least one initially open arrow.
+- Dependency depth within requested tolerance.
+- Branching within requested tolerance.
+- Cross dependencies within requested tolerance.
+- No dependency cycle.
+- No isolated competitive arrow unless the Difficulty Profile explicitly permits it.
+
+An isolated arrow has zero incoming and zero outgoing dependency degree. Low-level tutorial fixtures may intentionally include isolated arrows to teach basic movement. Generated competitive boards reject them because they add actions without strategic dependency.
+
+##### Authoritative Solver
+
+The solver is independent of generator placement logic. It receives canonical board geometry and rules version only.
+
+The solver must not trust:
+
+- Generator placement order.
+- Generator-provided solution.
+- Declared dependency metadata.
+- Client state.
+- Baked solution data.
+
+Solver stages:
+
+1. Re-run structural geometry validation.
+2. Build an integer occupancy index.
+3. Calculate every arrow's complete blocker set from its escape ray.
+4. Build the dependency graph.
+5. Detect cycles.
+6. Run deterministic topological removal simulation.
+7. Apply each selected removal through the same canonical collision function used by live gameplay.
+8. Verify all arrows are removed.
+9. Return canonical solution, solution-shape classification, dependency analysis, and solver hash inputs.
+
+Canonical solution tie break:
+
+- At each step, calculate all currently open arrows.
+- Select the smallest canonical arrow ID.
+- Record the selected arrow.
+- Continue until complete or deadlocked.
+
+The canonical solution is for validation, replay checks, automated tests, and analysis. It is not the only sequence a player must use unless the graph itself has a unique ordering.
+
+##### Multiple Solutions Policy
+
+Decision: **Multiple valid completion orders are intentionally allowed for generated competitive puzzles.**
+
+Reasoning:
+
+- Branching is an approved Difficulty Profile dimension.
+- Multiple open choices create strategy and replay learning.
+- Both PvP players receive the same choices, preserving fairness.
+- Forcing one global sequence would make branching impossible and increase memorization.
+- In this monotonic removal game, a valid removal only removes blockers and cannot create a new blocker.
+
+The solver classifies solution shape:
+
+- `unique`: exactly one valid topological completion order.
+- `multiple`: more than one valid topological completion order.
+- `unsolvable`: no complete order.
+
+A dependency DAG has a unique topological ordering only when exactly one node is available at every Kahn solver step. If two or more nodes are available at any step, multiple valid orders exist.
+
+Profile policy:
+
+- Tutorial may require a unique or tightly guided order.
+- Early Practice may allow low branching.
+- Ranked, advanced Practice, House, and Tournament may intentionally require multiple choices.
+- The measured branching profile must match the requested range.
+
+The platform does not need to enumerate an exponential number of solutions. It needs to prove complete solvability and classify unique versus multiple ordering.
+
+##### Solver Guarantees
+
+A puzzle passes solver validation only when:
+
+- At least one arrow exists.
+- At least one initial legal action exists.
+- Every arrow is reachable by a complete removal order.
+- The dependency graph is acyclic.
+- Canonical simulation removes every arrow.
+- Every simulated action agrees with the live collision function.
+- No generated competitive arrow is isolated unless permitted.
+- No impossible or ambiguous geometry exists.
+- Minimum successful actions equals the number of arrows.
+- Unique/multiple solution classification is known.
+- Dependency and branching metrics are complete.
+- Solver output is deterministic.
+
+No solver timeout is interpreted as solvable. A timeout or resource limit is a validation failure.
+
+##### Collision Validation
+
+One pure versioned collision function is shared conceptually by:
+
+- Generator validation.
+- Dependency derivation.
+- Solver simulation.
+- Live action validation.
+- Replay reconstruction.
+- Dispute verification.
+
+Collision input:
+
+- Immutable board geometry.
+- Removed-arrow state.
+- Target arrow ID.
+- Rules version.
+
+Collision output:
+
+- `clear` or `blocked`.
+- Nearest blocker ID when blocked.
+- Collision cell.
+- Distance in cells from the head.
+- Escape distance to complete board exit when clear.
+
+Collision invariants:
+
+- Only cells in the forward directional ray count.
+- Removed arrows do not block.
+- The target arrow does not block itself.
+- Visual dimensions do not affect collision.
+- Same input produces byte-identical canonical output.
+- Rejected blocked action does not mutate state.
+- Accepted action removes only the target arrow.
+
+##### Gameplay Simulation Validator
+
+After solver success, a separate validator replays the canonical solution through the production rule contract.
+
+It verifies:
+
+- Every action is accepted in order.
+- State version increments correctly.
+- Removed-arrow state is monotonic.
+- Derived progress reaches exactly 100%.
+- Completion occurs only after the final arrow.
+- No action removes more than one arrow.
+- No hidden generator shortcut bypasses collision.
+- Canonical final state checksum matches solver expectations.
+
+This guards against a solver that proves a graph property but disagrees with live action semantics.
+
+##### Difficulty Calibration
+
+The generator receives a requested Difficulty Profile. The analyzer measures the completed candidate independently.
+
+Measured features:
+
+- Board width and height.
+- Arrow count.
+- Occupied-cell count and density.
+- Minimum successful actions.
+- Initially open arrow count.
+- Open-choice count at every solver wave.
+- Dependency edge count.
+- Longest dependency depth.
+- Branching distribution.
+- Cross-dependency count.
+- Isolated-arrow count.
+- Blocked-choice ratio.
+- Arrow path-length percentiles.
+- Turn-count percentiles.
+- Direction distribution.
+- Spatial cluster distribution.
+- Nearest-route spacing.
+- Visual crowding.
+- Minimum rendered cell size at target viewports.
+- Canonical solver operations.
+- Expected solve-time percentiles.
+
+Difficulty acceptance has two levels:
+
+Hard constraints:
+
+- Solvable.
+- No cycles.
+- No prohibited isolated arrows.
+- Geometry valid.
+- Density and visual scale within accessibility/readability bounds.
+- Required arrow count and dependency depth safety bounds.
+
+Tolerance constraints:
+
+- Complexity score distance.
+- Line count.
+- Branching.
+- False-route/blocked-choice ratio.
+- Density.
+- Pattern bias result.
+- Expected solve time.
+- Visual complexity.
+
+The candidate score uses integer normalized distances. Weights belong to the immutable Difficulty Analyzer Version.
+
+No candidate is accepted solely because the generator intended it to be difficult. Measured analysis is authoritative.
+
+##### Expected Solve Time Calibration
+
+Expected solve time is initially estimated from a versioned model using:
+
+- Successful action count.
+- Number and distribution of open choices.
+- Dependency depth.
+- Blocked-choice exposure.
+- Path readability.
+- Visual complexity.
+- Board navigation burden.
+- Historical anonymous performance cohorts when enough production data exists.
+
+Before production telemetry is available:
+
+- Use solver-derived features and controlled human calibration sessions.
+- Mark model confidence explicitly.
+- Use conservative broad percentile ranges.
+
+After sufficient verified data:
+
+- Recalibrate in a new Analyzer Version.
+- Never rewrite historical puzzle analysis.
+- Exclude suspicious, assisted, disconnected, or invalid sessions.
+- Keep player Trust Score out of the puzzle's measured intrinsic difficulty.
+
+##### Hashing And Canonicalization
+
+Canonical board encoding includes:
+
+- Geometry schema version.
+- Board width and height.
+- Arrows sorted by canonical ID.
+- Each arrow's direction.
+- Each arrow's ordered tail-to-head cell list.
+- Rules version.
+
+It excludes:
+
+- Removed state.
+- Player identity.
+- Match result.
+- Animation.
+- Color.
+- Sound.
+- Client timestamps.
+
+Hashes:
+
+| Hash | Purpose |
+|---|---|
+| Seed hash | Audit and duplicate-seed detection without exposing seed |
+| Difficulty Profile hash | Identity of requested generation target |
+| Generation hash | Identity of generator inputs and selected candidate |
+| Puzzle hash | Identity of immutable canonical board and rules |
+| Solver hash | Identity of canonical solution and dependency analysis |
+| Validation hash | Identity of all required validation results |
+| Replay genesis hash | Binds immutable puzzle metadata before actions exist |
+| Final replay hash | Binds replay genesis, ordered authoritative events, timing, and outcome |
+
+Generation hash inputs:
+
+- Game ID.
+- Complete generator identity.
+- Seed hash.
+- Difficulty Profile hash.
+- Selected pattern metadata.
+- Candidate index.
+- Canonical encoding version.
+
+Validation hash inputs:
+
+- Puzzle hash.
+- Solver, validator, analyzer, and rules versions.
+- Solver hash.
+- Measured analysis hash.
+- Gameplay simulation final checksum.
+- Acceptance decision.
+
+The final Replay Hash cannot exist until the match ends. The Puzzle Service produces the Replay Genesis Hash; Realtime Replay infrastructure produces the final Replay Hash.
+
+##### Database Uniqueness Flow
+
+```text
+Begin short transaction
+  -> Insert immutable puzzle metadata
+  -> Claim seed hash under one-use policy
+  -> Claim puzzle hash under one-use policy
+  -> Insert scope assignment
+  -> Commit
+```
+
+If a seed or puzzle hash uniqueness constraint conflicts:
+
+- Roll back.
+- Mark the generation attempt as duplicate.
+- Generate new cryptographic seed material.
+- Never assign the existing puzzle to the new one-use scope.
+
+Shared PvP behavior:
+
+- One puzzle row.
+- One puzzle assignment for the match.
+- Two participant state rows.
+
+Tournament behavior:
+
+- One puzzle assignment for each tournament match.
+- Different tournament matches receive different one-use claims.
+
+Daily behavior:
+
+- One explicit reusable challenge-window assignment.
+- All participants reference that approved assignment.
+- It cannot be reassigned as a live one-use puzzle.
+
+Replay reconstruction reads existing metadata and does not attempt a new uniqueness claim.
+
+##### Production Validation Pipeline
+
+Every generated candidate passes these gates in order:
+
+| Gate | Verification | Failure result |
+|---|---|---|
+| Version | Complete approved tuple exists | Reject |
+| Seed | Format, length, scope, and derivation valid | Reject |
+| Structure | Board and arrow schema valid | Reject |
+| Geometry | Bounds, continuity, occupancy, head direction valid | Reject |
+| Collision | Every ray and nearest blocker deterministic | Reject |
+| Dependency | Graph derivation complete and acyclic | Reject |
+| Solver | Complete canonical solution exists | Reject |
+| Isolation | No prohibited degree-zero arrow | Reject |
+| Simulation | Canonical actions reproduce live rules | Reject |
+| Difficulty | Hard constraints and tolerances pass | Reject |
+| Determinism | Canonical encoding and expected hashes stable | Reject |
+| Uniqueness | Seed and puzzle claims available | Retry new seed |
+| Persistence | Metadata and assignment transaction commits | Fail closed |
+
+There is no warning-only path for a production puzzle.
+
+##### Performance Design
+
+The existing Sprint 5 Practice lifecycle benchmark measured approximately 4.34 ms per operation, but it uses the current prototype generator and is not a production Generator/Solver certification.
+
+Phase 3 planning estimates for the complete production pipeline on a modern server CPU:
+
+| Profile | Expected candidate pipeline | Initial service target |
+|---|---:|---:|
+| Tutorial fixture validation | Under 10 ms | P99 under 50 ms |
+| Standard Practice/PvP | 25-250 ms | P50 under 100 ms, P95 under 500 ms, P99 under 1.5 s |
+| Advanced Ranked/House | 100-750 ms | P50 under 300 ms, P95 under 1.5 s, P99 under 3 s |
+| Elite Tournament | 250 ms-2 s | P50 under 750 ms, P95 under 3 s, P99 under 5 s |
+| Replay reconstruction | 10-250 ms | P95 under 500 ms for standard profiles |
+
+These are design targets, not measured production claims. Phase 3 implementation must add dedicated generator, solver, validator, analyzer, hash, uniqueness, and reconstruction benchmarks before freeze.
+
+Hard generation deadline:
+
+- Configured by profile class.
+- Never used to lower difficulty.
+- Standard initial ceiling: 5 seconds.
+- Elite/Tournament initial ceiling: 10 seconds.
+- Deadline exhaustion fails generation safely.
+- Final ceilings require load-test evidence.
+
+##### Concurrency And Scalability
+
+Generator workers are stateless with respect to active player state.
+
+Concurrency rules:
+
+- No global store lock during generation, solving, validation, analysis, hashing, or reconstruction.
+- Candidate indexes may run concurrently in bounded worker pools.
+- Worker completion order never affects selected output.
+- CPU concurrency is bounded per process.
+- Jobs have context deadline, cancellation, priority, and idempotency key.
+- Database transactions remain short.
+- Database uniqueness constraints are final authority.
+- Redis may coordinate reservations and backpressure but cannot replace PostgreSQL uniqueness.
+- Queue depth and oldest-job age are monitored.
+- Generation capacity scales horizontally by adding workers.
+
+Priority order:
+
+1. Active Tournament or matched live competition awaiting a puzzle.
+2. Ranked/PvP match preparation.
+3. Practice and House requests.
+4. Pool replenishment.
+5. Offline calibration and corpus generation.
+
+The platform should prepare a puzzle before declaring a match live. A player does not enter an active timer while generation is incomplete.
+
+##### Caching Strategy
+
+Allowed caches:
+
+- Immutable version manifests and artifacts.
+- Difficulty Profile records by profile hash.
+- Pattern definitions by version.
+- Validated, unassigned one-use puzzle pools.
+- Reconstructed immutable geometry keyed by puzzle hash.
+- Replay reconstruction results keyed by replay hash.
+
+Rules for pre-generated pools:
+
+- Every pooled puzzle already passed all validation.
+- Every puzzle remains unassigned and one-use.
+- Claiming it is an atomic database operation.
+- Pool selection does not reuse a puzzle.
+- Pools are partitioned by complete version tuple and Difficulty Profile class.
+- Expired pools may be retired, never silently reassigned across incompatible profiles.
+- A cached puzzle is not public and is not sent before assignment.
+
+Disallowed caches:
+
+- Reusable live puzzle catalogue.
+- Client-side generated boards.
+- Cached authoritative participant state without durable version checks.
+- Cache entries lacking puzzle hash and version tuple.
+- A fallback cache that changes difficulty.
+
+Cache loss affects latency, not integrity. PostgreSQL metadata and object/version artifacts remain authoritative.
+
+##### Failure Handling
+
+| Failure | Required behavior |
+|---|---|
+| CSPRNG unavailable | Fail generation and alert; never use weak randomness |
+| Version unavailable | Reject request; no fallback to latest |
+| Candidate deadlock | Reject candidate |
+| All candidates fail | Retry with new seed under bounded policy |
+| Difficulty mismatch | Reject candidate; never relabel |
+| Duplicate seed/puzzle | Roll back claim and generate fresh seed |
+| Worker timeout | Cancel work, preserve metrics, fail safely |
+| Worker crash | Idempotent job retry on another worker |
+| PostgreSQL unavailable | Do not assign or deliver puzzle |
+| Redis unavailable | Use approved degraded queue path only if PostgreSQL uniqueness remains enforceable |
+| Object storage unavailable | Generation may continue only if replay/version retention requirements remain safely queued; live policy decided before implementation |
+| Hash mismatch | Quarantine puzzle and create integrity alert |
+| Replay reconstruction mismatch | Mark replay under review; never rewrite history |
+| Match cancelled during generation | Discard or return unassigned candidate to an approved private pool |
+
+Financial matches must emit platform cancellation/refund instructions if generation fails after funds are locked. The Maze module does not perform the refund itself.
+
+##### Generator Security
+
+Security requirements:
+
+- Seed-encryption key comes from the approved secret manager.
+- Separate keys for seed derivation, seed encryption, replay signing, and event integrity.
+- Key IDs are stored; key material is not.
+- Active seed material is least-privilege restricted.
+- Generation workers cannot access wallet or admin data.
+- Puzzle metadata APIs redact seed and canonical solution during active matches.
+- No endpoint returns solver output to active players.
+- Generation requests are internal authenticated service calls.
+- Candidate failure logs contain codes, not board dumps or secrets.
+- Test fixtures never use production keys.
+- Bot resistance does not rely on hiding the rules.
+
+##### Generator And Solver Test Strategy
+
+Required test layers:
+
+Unit:
+
+- Deterministic random stream vectors.
+- Geometry rules.
+- Collision and nearest blocker.
+- Dependency graph.
+- Unique/multiple solution classification.
+- Canonical encoding and every hash.
+- Difficulty feature extraction.
+- Candidate ranking.
+
+Property:
+
+- Same input always gives same output.
+- Every accepted puzzle is solvable.
+- Accepted state transitions are monotonic.
+- Removing an arrow never creates a blocker.
+- No occupied-cell overlap.
+- Every arrow direction aligns with its head segment.
+- Puzzle hash changes when canonical geometry changes.
+- Renderer-only metadata never changes puzzle hash.
+
+Fuzz:
+
+- Malformed geometry.
+- Extreme board sizes.
+- Duplicate IDs and cells.
+- Invalid directions.
+- Corrupted replay metadata.
+- State/version mismatch.
+- Canonical decoder inputs.
+
+Integration:
+
+- Generate -> solve -> validate -> analyze -> hash -> claim -> assign.
+- Concurrent duplicate uniqueness claims.
+- Shared PvP puzzle with independent states.
+- Practice uniqueness across large sample.
+- Tournament per-match uniqueness.
+- Replay regeneration across stored versions.
+- PostgreSQL rollback and retry.
+- Worker cancellation and recovery.
+
+Parity:
+
+- Reference handcrafted tutorial fixtures.
+- Approved reference collision fixtures.
+- Backend, renderer, and replay verifier agree on IDs, cells, directions, blockers, and hashes.
+
+Load:
+
+- Concurrent generation by profile class.
+- Pool claim contention.
+- Replay reconstruction bursts.
+- Worker restart and queue recovery.
+- Database uniqueness conflicts.
+
+Long-run corpus:
+
+- Generate at least 100,000 candidates across approved profile bands before freeze.
+- Zero accepted deadlocks.
+- Zero accepted structural violations.
+- Zero duplicate one-use assignments.
+- Difficulty acceptance and rejection distributions documented.
+- Pattern distribution and readability outliers reviewed.
+
+##### Qualification And Release Gates
+
+A Generator Version cannot become active until:
+
+- All deterministic vectors pass.
+- Solver and validator independently pass every accepted corpus puzzle.
+- Reference rule fixtures pass.
+- 100,000-candidate qualification corpus has zero invalid accepted puzzles.
+- Requested-versus-measured calibration is documented.
+- Performance targets are measured.
+- Cross-platform canonical hashes match.
+- PostgreSQL uniqueness races are tested.
+- Replay reconstruction succeeds from stored metadata.
+- Security and secrets review passes.
+- Observability dashboards and alerts exist.
+- Rollback to the prior approved version is proven.
+
+Activation:
+
+- Register version as inactive.
+- Run qualification.
+- Approve for selected modes/profile bands.
+- Enable through server configuration.
+- Monitor acceptance, latency, failures, and integrity.
+- Expand gradually.
+
+Rollback:
+
+- Stop assigning the affected version to new matches.
+- Preserve it for replay and disputes.
+- Continue existing matches unless integrity policy requires cancellation.
+- Never mutate historical puzzle metadata.
+
+##### Phase 3 Decisions
+
+| Decision | Approved design |
+|---|---|
+| Tutorial | Five versioned handcrafted fixtures allowed |
+| Non-tutorial puzzles | Server-generated only |
+| Seed | 256-bit CSPRNG material plus domain-separated HMAC derivation |
+| Deterministic RNG | Versioned HMAC-SHA-256 counter stream |
+| Candidate generation | Bounded deterministic batch; parallel execution allowed |
+| Candidate selection | Immutable integer score tuple, never fastest-worker wins |
+| Patterns | Versioned weighted generator inputs, not levels |
+| Geometry | Integer orthogonal tail-to-head cells |
+| Dependencies | Derived from physical escape-ray collision |
+| Collision | One pure canonical function shared by all rule consumers |
+| Solver | Independent graph plus live-rule simulation |
+| Multiple solutions | Intentionally allowed and measured |
+| Deadlocks | Hard rejection |
+| Isolated arrows | Rejected in generated competition unless profile explicitly permits |
+| Difficulty | Measured output must match requested profile |
+| Hashes | Versioned canonical seed, generation, puzzle, solver, validation, and replay hashes |
+| Uniqueness | PostgreSQL claims over seed and puzzle hash |
+| Caching | Private validated unassigned one-use pools allowed |
+| Performance | Bounded stateless workers outside global locks |
+| Failure | Fail closed; never lower difficulty or return fallback board |
+| Replay | Exact historical regeneration plus authoritative actions |
+
+##### Phase 3 Definition Of Done
+
+Documentation deliverables are complete:
+
+- Permanent puzzle generation rules.
+- Complete production generation pipeline.
+- Secure seed and deterministic random-stream strategy.
+- Generator versioning.
+- Deterministic candidate generation and selection.
+- Pattern system.
+- Geometry and dependency creation.
+- Independent authoritative solver.
+- Intentional multiple-solution policy.
+- Collision and gameplay simulation validation.
+- Requested-versus-measured difficulty calibration.
+- Canonical hashing and replay genesis.
+- Database uniqueness flow.
+- Performance targets.
+- Concurrency, scaling, caching, and failure handling.
+- Security requirements.
+- Test, qualification, activation, and rollback gates.
+
+No production gameplay code, migration, API, worker, React component, CSS, or frozen Sprint 1 through Sprint 5 implementation was changed during Phase 3.
+
+Phase 3 is **APPROVED**.
+
+Sprint 6 implementation remains **NOT STARTED**.
+
+Phase 4 may convert the approved architecture into an implementation blueprint. Production gameplay implementation remains prohibited until Phase 4 is approved.
+
+#### Sprint 6 Phase 4: Implementation Blueprint
+
+Status: **APPROVED**
+
+Implementation status: **READY TO BEGIN IMPLEMENTATION PHASE 1**
+
+Phase 3 is approved. Phase 4 is the implementation blueprint for Maze Arena as the first Games Platform consumer. It converts approved decisions into package ownership, implementation stages, contracts, migration specifications, tests, acceptance targets, and freeze evidence. It does not authorize production code, migrations, API changes, frontend components, or modifications to frozen Sprint 1 through Sprint 5.
+
+Sprint 6 governance status:
+
+| Area | Status |
+|---|---|
+| Architecture | Complete |
+| Design | Complete |
+| Implementation Blueprint | Complete |
+| Governance | Complete |
+| Implementation | Phase 1 authorized; Phases 2-9 not started |
+
+##### Blueprint Authority
+
+Implementation must follow this order of authority:
+
+1. Frozen Sprint 1 through Sprint 5 public contracts.
+2. Approved Sprint 6 Phase 2 Games Platform architecture.
+3. Approved Sprint 6 Phase 3 Generator and Solver design.
+4. This Phase 4 implementation blueprint.
+5. Implementation details that do not contradict the documents above.
+
+When implementation exposes an ambiguity, development stops in the affected phase and the README is amended and approved before code proceeds. A developer may not silently reinterpret collision, uniqueness, difficulty, replay, authority, or version compatibility rules.
+
+##### Architecture Protection Rule
+
+This is a permanent Skill Arena engineering rule.
+
+No Sprint 6 implementation may modify Sprint 1, Sprint 2, Sprint 3, Sprint 4, or Sprint 5 business logic.
+
+An exception is permitted only when **all** of the following are proven before the change is made:
+
+1. The change is platform-generic.
+2. The change benefits future games, not only Maze Arena.
+3. The change is fully backward compatible.
+4. Existing public contracts remain unchanged.
+5. Regression tests for every affected frozen sprint pass.
+6. The change and its rationale are documented in this README.
+
+Additional controls:
+
+- A Maze-specific requirement is never sufficient justification to change a frozen platform domain.
+- Additive implementation behind an existing interface is preferred over altering the interface.
+- A generic extension must not introduce Maze fields, Maze branches, Maze terminology, or Maze storage into frozen platform packages.
+- Before implementation, the proposed exception must identify the frozen files affected, public contracts reviewed, future-game benefit, compatibility strategy, regression suite, rollback plan, and approving decision.
+- After implementation, the phase validation report must include the exact frozen files changed and evidence for every condition above.
+- If any condition is false, uncertain, or unproven, the frozen sprint remains unchanged and the behavior belongs inside the Games Platform or Maze module.
+- Emergency bug or security fixes follow the frozen sprint maintenance policy and remain separate from feature implementation.
+
+This rule applies during Sprint 6 and remains the default protection model for every future game.
+
+##### Final Project Structure
+
+The production implementation will use the following logical layout:
+
+```text
+backend/
+  internal/
+    arena/                              # Frozen Sprint 5 platform boundary
+    realtime/                           # Frozen transport, sessions, lifecycle, storage
+    games/
+      registry/
+        catalog.go                      # Immutable descriptors and factory lookup
+        bootstrap.go                    # Explicit composition-root registration
+        compatibility.go                # Version tuple compatibility
+        manifest.go                     # Manifest parsing and validation
+      interfaces/
+        module.go                       # Generic runtime game interface
+        context.go                      # Match, participant, action, viewer contexts
+        action.go                       # Generic action/result envelopes
+        state.go                        # Opaque state and transition contracts
+        snapshot.go                     # Viewer-safe snapshot contract
+        replay.go                       # Generic replay codec contract
+        renderer.go                     # Versioned renderer payload contract
+        versions.go                     # Complete compatibility tuple
+      shared/
+        canonical.go                    # Game-neutral canonical encoding
+        errors.go                       # Stable platform game error codes
+        ids.go                          # Validated game-domain identifiers
+        hashes.go                       # Game-neutral hash primitives
+        testkit/
+          contract.go                   # Required module conformance suite
+          fixtures.go                   # Game-neutral contract fixtures
+      maze/
+        module.json                     # Immutable module descriptor
+        module.go                       # RuntimeGame adapter and composition
+        engine/
+          state.go                      # Authoritative participant state
+          action.go                     # Maze action schema
+          collision.go                  # Sole cell-occupancy collision authority
+          transition.go                 # Validated immutable state transitions
+          progress.go                   # Progress and combo inputs
+          completion.go                 # Completion and score inputs
+          snapshot.go                   # Viewer-safe state projection
+        generator/
+          service.go                    # Pipeline orchestration
+          request.go                    # Internal generation request
+          seed.go                       # CSPRNG and domain-separated derivation
+          random.go                     # Versioned deterministic random stream
+          patterns.go                   # Versioned pattern selection
+          geometry.go                   # Candidate geometry construction
+          dependency.go                 # Geometry-derived dependency graph
+          candidate.go                  # Deterministic candidate ranking
+          difficulty.go                 # Requested Difficulty Profile handling
+          metadata.go                   # Immutable puzzle metadata
+          hashes.go                     # Generation and puzzle hash inputs
+          repository.go                 # Puzzle metadata and assignment port
+        solver/
+          solver.go                     # Independent authoritative solver
+          graph.go                      # Graph analysis and topological behavior
+          simulation.go                 # Live-rule solution verification
+          solution.go                   # Canonical solution representation
+        validator/
+          validator.go                  # Ordered production validation gates
+          geometry.go                   # Structural and geometric checks
+          collision.go                  # Collision consistency checks
+          dependency.go                 # Dependency consistency checks
+          difficulty.go                 # Measured difficulty acceptance
+          determinism.go                # Reproducibility and hash checks
+          report.go                     # Canonical validation result
+        replay/
+          codec.go                      # Maze event payload codec
+          genesis.go                    # Replay genesis metadata
+          reconstruct.go                # Exact-version reconstruction
+          verifier.go                   # State, hash, outcome verification
+        renderer/
+          schema.go                     # Client-safe renderer schema
+          projection.go                 # Authoritative state to renderer payload
+          visibility.go                 # Player/spectator/reviewer visibility
+        api/
+          schema.go                     # Maze payload schemas only
+          errors.go                     # Mapping Maze errors to generic codes
+          manifest.go                   # Public game metadata projection
+        shared/
+          arrow.go                      # Maze-only immutable arrow type
+          board.go                      # Maze-only canonical board type
+          cell.go                       # Integer cell and direction primitives
+          versions.go                   # Maze version constants
+          encoding.go                   # Maze canonical encoding
+        tests/
+          fixtures/                     # Approved tutorial and collision vectors
+          corpus/                       # Qualification corpus metadata
+          testdata/                     # Non-secret malformed inputs
+    persistence/
+      postgres/
+        games/                           # Implementations of game repository ports
+
+frontend/
+  app/
+    games/
+      registry/
+        catalog.ts                      # Renderer registration by game/version
+      interfaces/
+        renderer.ts                     # Generic game renderer contract
+        events.ts                       # Generic client event envelopes
+      shared/
+        transport.ts                    # Existing Realtime client adapter
+        state.ts                        # Generic connection/sync state
+      maze/
+        renderer/
+          MazeRenderer.tsx              # Renderer composition
+          MazeBoard.tsx                 # Board presentation
+          MazeArrow.tsx                 # Accessible arrow presentation
+        camera/
+          useMazeCamera.ts              # Pan, zoom, fit, responsive framing
+        animation/
+          transitions.ts                # Accepted/blocked presentation
+          timing.ts                     # Versioned renderer timing constants
+        audio/
+          cues.ts                       # Optional accessible sound cues
+        accessibility/
+          controls.tsx                  # Keyboard and assistive interaction
+          announcements.ts              # Non-visual action feedback
+        protocol/
+          schemas.ts                    # Runtime validation of renderer payloads
+          actions.ts                    # Maze action intent creation
+        tests/
+          fixtures/
+          renderer.spec.tsx
+          accessibility.spec.tsx
+          protocol.spec.ts
+```
+
+The physical implementation may combine very small files when that improves clarity, but package ownership and dependency direction may not change.
+
+##### Folder Ownership
+
+| Folder | Owns | Must not own |
+|---|---|---|
+| `games/registry` | Approved module registration, descriptors, factories, compatibility resolution | Match state, Maze rules, transport |
+| `games/interfaces` | Generic runtime contracts and opaque envelopes | Any Maze field or behavior |
+| `games/shared` | Canonical game-neutral primitives and conformance tests | Puzzle generation or game-specific rules |
+| `games/maze/engine` | Maze actions, collision, state transitions, progress, completion | Networking, persistence, matchmaking, rewards |
+| `games/maze/generator` | Seeds, deterministic generation, profiles, patterns, metadata, repository port | Live participant state or WebSockets |
+| `games/maze/solver` | Independent solvability and solution classification | Candidate generation decisions |
+| `games/maze/validator` | Production acceptance gates and measured difficulty verification | Mutating accepted puzzles |
+| `games/maze/replay` | Maze event codec, regeneration, deterministic verification | Generic event storage or signing infrastructure |
+| `games/maze/renderer` | Client-safe payload projection and visibility | Client components or gameplay authority |
+| `games/maze/api` | Maze-specific payload validation and stable error mapping | HTTP server, auth, sessions, transport |
+| `games/maze/shared` | Maze-only immutable value types and encoding | Platform-wide utilities |
+| `games/maze/tests` | Maze fixtures, corpus metadata, contract evidence | Production fallback data |
+| `persistence/postgres/games` | PostgreSQL implementations of repository ports | Domain policy |
+| `frontend/app/games/maze` | Rendering, interaction intent, camera, animation, audio, accessibility | Generation, collision decisions, scoring, completion |
+
+Dependency direction:
+
+```text
+Realtime Arena -> Games interfaces <- Maze module
+                                  |
+                                  v
+                            Maze domain packages
+                                  |
+                                  v
+                         Repository/service ports
+                                  |
+                                  v
+                      PostgreSQL/Redis/S3 adapters
+```
+
+Maze domain packages may depend on `games/interfaces`, `games/shared`, and Maze-owned packages. They may not import wallet, treasury, authentication handlers, matchmaking internals, notification delivery, tournament repositories, or Admin CRM packages.
+
+##### Module Manifest Blueprint
+
+`games/maze/module.json` is version controlled, validated at startup, and represented by an immutable database registration:
+
+```json
+{
+  "id": "maze",
+  "name": "Maze Arena",
+  "gameVersion": "1.0.0",
+  "rulesVersion": 1,
+  "protocolVersion": 1,
+  "replayVersion": 1,
+  "rendererVersion": 1,
+  "stateSchemaVersion": 1,
+  "supports": {
+    "practice": true,
+    "pvp": true,
+    "ranked": true,
+    "houseChallenge": true,
+    "tournament": true,
+    "dailyChallenge": true,
+    "replay": true,
+    "spectator": true,
+    "teams": false,
+    "ai": false
+  },
+  "players": {
+    "minimum": 1,
+    "maximum": 2
+  }
+}
+```
+
+The manifest contains no secrets, environment routing, active Generator Version, financial policy, or mutable feature flags. Runtime policy selects approved versions and modes through server configuration and database status.
+
+##### Implementation Phases And Approval Gates
+
+Sprint 6 is divided into nine small, sequential implementation phases. Only the current phase may be implemented. Future-phase code, placeholder scaffolding, speculative APIs, and incomplete production paths are prohibited.
+
+Every phase follows:
+
+```text
+Approved phase scope
+  -> Implementation
+  -> Format and build
+  -> Focused tests
+  -> Applicable Sprint 1-5 regressions
+  -> Documentation reconciliation
+  -> Validation report
+  -> Review
+  -> Explicit approval
+  -> Next phase
+```
+
+A successful build does not authorize the next phase. Work stops after the validation report until the current phase is reviewed.
+
+###### Implementation Phase 1: Games Platform
+
+Deliver:
+
+- Games Registry.
+- Generic Game Interface.
+- Module manifest validation and explicit module loading.
+- Dependency injection at the application composition root.
+- Compatibility and historical version resolution.
+- Shared canonical primitives and stable game errors.
+- A test-only module proving a second game can register without platform changes.
+- Registration and generic contract tests.
+
+Must not implement:
+
+- Maze generation, solving, collision, gameplay, replay, API payloads, Realtime action dispatch, or frontend.
+
+Gate:
+
+- Existing Sprint 5 modules compile and behave unchanged.
+- Duplicate, invalid, or incompatible registrations fail startup.
+- Historical resolution never falls back to latest.
+- The test-only game registers and passes the generic suite without Realtime or Maze knowledge.
+- Dependency direction and Architecture Protection Rule checks pass.
+
+###### Implementation Phase 2: Puzzle Service
+
+Deliver:
+
+- Puzzle Service interface and orchestration boundary.
+- Generator Version registration.
+- Cryptographically secure seed generation and encryption/reference handling.
+- Versioned deterministic random stream.
+- Puzzle metadata, Difficulty Profile metadata, and canonical hash primitives.
+- Repository ports.
+- Additive PostgreSQL migrations and repository implementations for version, profile, puzzle, analysis, uniqueness, and assignment metadata required by the service.
+- Worker boundary, cancellation, deadlines, idempotency, short transactions, and atomic assignment.
+
+Must not implement:
+
+- Production pattern generation, authoritative solver behavior, live Maze actions, replay finalization, Realtime dispatch, or frontend.
+
+Gate:
+
+- Seed and random-stream vectors are deterministic where required.
+- Secret seed material never reaches logs, traces, errors, or client payloads.
+- Generator CPU work is structurally outside global locks and database transactions.
+- Concurrent uniqueness claims produce one winner.
+- Rollback leaves no partial metadata, claim, or assignment.
+- PostgreSQL is authoritative in production; in-memory adapters remain test/local only.
+
+###### Implementation Phase 3: Generator
+
+Deliver:
+
+- Versioned pattern selection.
+- Deterministic geometry and physical dependency generation.
+- Bounded candidate batches and deterministic candidate ranking.
+- Production validation pipeline orchestration.
+- Measured difficulty feature calculation and requested-profile comparison.
+- Generation, puzzle, profile, analysis, solution, and validation hashing inputs.
+- Stable rejection reasons and generation observability.
+
+Must not implement:
+
+- Final solver engine shortcuts inside generation.
+- Client puzzle generation.
+- Realtime gameplay or frontend rendering.
+
+Gate:
+
+- Identical complete inputs produce byte-identical canonical candidates and hashes.
+- Worker completion order cannot affect selection.
+- Server load never reduces complexity or changes requested difficulty.
+- Every candidate reaches all required validation gates; no warning-only acceptance exists.
+- Generator tests prove structural bounds, geometry invariants, pattern behavior, cancellation, and deterministic ranking.
+
+###### Implementation Phase 4: Solver
+
+Deliver:
+
+- Independent authoritative graph solver.
+- Live-rule simulation.
+- Deadlock detection.
+- Isolated-arrow policy enforcement.
+- Unique/multiple valid completion classification.
+- Canonical solution and minimum-action calculation.
+- Difficulty verification independent from generator intent.
+- Puzzle uniqueness verification against persisted seed and puzzle claims.
+
+Must not implement:
+
+- Generator-specific candidate construction in solver packages.
+- Alternative collision rules.
+- Gameplay transport or frontend.
+
+Gate:
+
+- All approved tutorial and collision fixtures pass.
+- Every known deadlock, malformed board, and impossible collision is rejected.
+- Canonical solution reproduces the Maze engine's approved collision rules.
+- Requested and measured difficulty mismatch is rejected.
+- Accepted puzzles are solvable and uniqueness claims are valid.
+- Solver remains independently testable from generator selection logic.
+
+###### Implementation Phase 5: Replay
+
+Deliver:
+
+- Replay genesis metadata.
+- Maze replay event codec.
+- Generation, validation, event-root, state, outcome, and final replay hashes.
+- Exact-version puzzle reconstruction.
+- Ordered action replay.
+- Replay signature integration through frozen Realtime infrastructure.
+- Replay verification and under-review failure path.
+
+Must not implement:
+
+- A separate Maze event store, object-storage service, signature system, or public replay API.
+- Full-board canonical replay storage when deterministic reconstruction is possible.
+
+Gate:
+
+- Exact metadata reconstructs identical puzzle bytes and hash.
+- Ordered events reconstruct participant state and authoritative outcome.
+- Seed, action, timing, version, hash, or signature corruption fails closed.
+- Historical version resolution works without fallback.
+- Replay failure enters review and never mutates historical evidence.
+
+###### Implementation Phase 6: Maze Engine
+
+Deliver:
+
+- Sole integer cell-occupancy collision authority.
+- Maze action schema and validation.
+- Immutable participant state transitions.
+- Blocked and successful move results.
+- Progress and combo tracking.
+- Completion detection.
+- Maze scoring inputs.
+- Authoritative server timing inputs.
+- Viewer-safe renderer projection.
+- Handcrafted tutorial fixtures 1 through 5.
+
+Must not implement:
+
+- Networking, authentication, matchmaking, sessions, presence, reconnect, Wallet settlement, progression rewards, tournament logic, or client authority.
+
+Gate:
+
+- Every arrow moves only in its fixed direction.
+- Blocked actions preserve state and return authoritative collision presentation.
+- Only arrows that completely exit are removed.
+- State versions advance only on accepted transitions.
+- Progress, completion, scoring inputs, and timing are server-derived.
+- The engine passes unit, property, fuzz, race, and approved reference collision tests without a frontend.
+
+###### Implementation Phase 7: Realtime Integration
+
+Deliver:
+
+- Read-only game catalog projection.
+- Generic `game.action` and `game.sync.request` dispatch through the frozen gateway.
+- Maze registration through the Games Registry.
+- Existing Realtime queue, ready, match, leave, heartbeat, reconnect, event, and replay routes carrying generic game payloads.
+- Practice and tutorial lifecycle.
+- PvP and Ranked shared-puzzle assignment with independent participant states.
+- Progress synchronization, completion, winner, timeout, disconnect, forfeit, reconnect, and replay-ready events.
+- House, Daily, and Tournament assignment policy adapters without owning those platform lifecycles.
+
+Must not implement:
+
+- Maze-specific WebSockets, queues, sessions, presence, replay storage, matchmaking, or settlement.
+- Admin CRM controls.
+
+Gate:
+
+- Realtime packages contain no Maze import, field, switch, or rule.
+- Duplicate action returns the original receipt.
+- State conflict and sequence-gap recovery are deterministic.
+- PvP players receive identical puzzle and validation hashes with independent states.
+- Practice and House assignments are fresh and one-use.
+- Daily reuse is explicitly window-scoped.
+- Tournament matches receive separate claims while participants in one match share a puzzle.
+- Authentication, rate limits, presence, reconnect, lifecycle, and settlement remain owned by frozen services.
+
+###### Implementation Phase 8: Frontend
+
+Deliver:
+
+- Generic renderer registry.
+- Maze renderer and board.
+- Responsive camera, fit, pan, and zoom.
+- Accepted move acceleration, glide, exit, and removal after leaving the board.
+- Blocked move approach, impact, shake/bounce, and return.
+- Audio and effects with preferences.
+- Loading, preparation, ready, reconnecting, stale state, completion, defeat, victory, replay, and failure states.
+- Desktop, tablet, mobile, keyboard, screen-reader, reduced-motion, and reduced-audio support.
+- Protocol runtime validation and frontend tests.
+
+Must not implement:
+
+- Puzzle generation, collision decisions, scoring, completion, winner, seed selection, difficulty selection, or replay verification on the client.
+
+Gate:
+
+- Client sends intent only.
+- Renderer follows authoritative snapshots and presentation events.
+- Desktop, tablet, and mobile evidence passes.
+- Chromium, Firefox, and WebKit critical journeys pass.
+- Accessibility, reduced-motion, protocol, reconnect, and error-state tests pass.
+- No placeholder UI, mock production data, or sample-app production dependency remains.
+
+###### Implementation Phase 9: Production Hardening
+
+Deliver:
+
+- At least 100,000-candidate qualification corpus.
+- Load, stress, reconnect-storm, and soak tests.
+- Security and zero-trust action testing.
+- Replay certification across supported build targets.
+- Performance profiling and tuning without changing difficulty.
+- Failure testing for PostgreSQL, Redis, object storage, workers, generation, and network loss.
+- Observability dashboards, alerts, operational runbooks, rollback proof, and full Sprint 1 through Sprint 5 regression evidence.
+- Final Sprint 6 production and freeze report.
+
+Must not implement:
+
+- New game rules, modes, platform features, frontend pages, or architecture redesign.
+
+Gate:
+
+- Every Sprint 6 Definition of Done and Freeze Criteria item below is demonstrated.
+- All measurable performance and capacity targets pass on documented reference infrastructure.
+- No unresolved Critical or High defect remains.
+- Any accepted Medium or Low defect has an owner, impact analysis, mitigation, and explicit release decision.
+- Security, replay, uniqueness, authority, failure recovery, and frozen-sprint regression evidence pass.
+
+##### Mandatory Implementation Phase Validation Report
+
+Every implementation phase ends with a short, permanent validation record in this README. The report must contain:
+
+| Field | Required evidence |
+|---|---|
+| Phase | Phase number, name, scope, start date, and validation date |
+| Commit | Commit SHA under review; no freeze tag until Sprint 6 completion |
+| Files changed | Complete categorized file list, including generated migrations or artifacts |
+| APIs | Every API/event added, extended, or confirmed unchanged |
+| Database | Migrations, indexes, constraints, repository changes, and rollback result |
+| Tests added | Test files and behaviors introduced |
+| Tests passed | Exact commands, counts, coverage, environment, and relevant output |
+| Build verification | Formatting, Go build/vet/race, TypeScript, lint, frontend build, and applicable tools |
+| Performance impact | Before/after measurements or `not applicable` with evidence |
+| Security impact | Authority, authentication, authorization, secrets, rate limit, integrity, dependency, and threat review |
+| Frozen sprint impact | Files touched, contracts reviewed, regressions run, and Architecture Protection Rule result |
+| Documentation | README sections reconciled with implementation |
+| Remaining work | Work explicitly deferred to later approved phases |
+| Risks discovered | Severity, impact, owner, mitigation, and decision |
+| Recommendation | `APPROVE IMPLEMENTATION PHASE N` or `DO NOT APPROVE IMPLEMENTATION PHASE N` |
+
+Report rules:
+
+- Use actual command output and measured evidence; do not write "tests pass" without identifying the tests.
+- `Not applicable` requires a reason.
+- A remaining item that belongs to the current phase prevents approval.
+- Future-phase work is listed but not implemented.
+- Any unexpected frozen-sprint change automatically requires Architecture Protection Rule evidence.
+- The next implementation phase remains **NOT STARTED** until explicit approval is given.
+- A phase approval is not a Sprint 6 freeze and does not create a freeze tag.
+
+##### Release Engineering Rule
+
+Every implementation phase must satisfy all applicable requirements below before it can be approved.
+
+Functional:
+
+- The approved phase scope is fully implemented.
+- Every acceptance criterion is met.
+- No future-phase feature or placeholder implementation is included.
+- The README matches the implementation.
+
+Build:
+
+- Backend formatting and builds pass.
+- Frontend formatting and builds pass when the phase affects frontend code; otherwise the existing frontend production build must remain green.
+- No new compiler, linter, vet, runtime, or deprecation warning is introduced.
+- Production dependency and vulnerability audits are clean, or any external advisory has an explicit documented release decision.
+
+Testing:
+
+- Unit tests pass.
+- Integration tests pass.
+- Existing applicable regression tests pass.
+- Tests are added for every new behavior, error, boundary, and security control.
+- Race, fuzz, property, browser, or end-to-end suites run when required by the phase contract.
+
+Performance:
+
+- No regression against documented targets is accepted silently.
+- Relevant latency is measured.
+- Memory and allocation impact are measured for CPU-intensive, stateful, realtime, replay, or high-volume paths.
+- `Not applicable` requires a documented reason.
+
+Security:
+
+- No client-authoritative gameplay is introduced.
+- Replay and event integrity remain preserved.
+- Authentication and authorization are verified at every affected boundary.
+- Inputs, outputs, errors, secrets, dependencies, and abuse controls are reviewed.
+- The Architecture Protection Rule passes.
+
+Documentation and evidence:
+
+- The phase validation report includes a summary.
+- Files changed are listed.
+- Public contracts changed or confirmed unchanged are listed.
+- Database changes or confirmation of no database change are listed.
+- Test evidence includes exact commands and results.
+- Performance evidence includes measurements or a justified `not applicable`.
+- Security evidence identifies the controls reviewed.
+- Known limitations, deferred later-phase work, and discovered risks are explicit.
+
+Freeze decision:
+
+- Every phase ends with exactly one recommendation: `APPROVED` or `CHANGES REQUIRED`.
+- `APPROVED` is permitted only when no current-phase requirement remains incomplete.
+- `CHANGES REQUIRED` lists the exact corrections needed.
+- Terms such as partial, mostly complete, nearly ready, or conditionally approved are not valid phase decisions.
+- The next phase may not begin until the current phase is explicitly approved by the product owner.
+
+##### Public REST API Contracts
+
+All routes are additive under `/api/v1`. They use the frozen browser session/cookie, CSRF, CORS, authorization, rate-limit, request-ID, and stable error-envelope controls. Maze does not introduce separate authentication.
+
+Common error envelope:
+
+```json
+{
+  "code": "GAME_SESSION_NOT_FOUND",
+  "message": "The game session could not be found.",
+  "requestId": "req_01..."
+}
+```
+
+No active-session response exposes seed material, canonical solution, hidden dependencies, opponent private action history, solver output, or internal integrity evidence.
+
+###### `GET /api/v1/games`
+
+Purpose: return the approved player-visible game catalog from the Games Registry.
+
+Authentication: optional. Eligibility fields require an authenticated player.
+
+Request: no body.
+
+Response:
+
+```json
+{
+  "games": [
+    {
+      "id": "maze",
+      "name": "Maze Arena",
+      "description": "Clear the board by resolving every path.",
+      "gameVersion": "1.0.0",
+      "rendererVersion": 1,
+      "capabilities": {
+        "practice": true,
+        "pvp": true,
+        "ranked": true,
+        "replay": true,
+        "spectator": true
+      },
+      "playerRange": {"minimum": 1, "maximum": 2},
+      "availability": "available"
+    }
+  ]
+}
+```
+
+Errors:
+
+- `GAME_CATALOG_UNAVAILABLE` (`503`).
+- `RATE_LIMITED` (`429`).
+
+Validation: only active player-visible versions are returned; internal artifact digests and retired versions are omitted.
+
+###### `GET /api/v1/games/{gameId}`
+
+Purpose: return one approved game descriptor and available modes.
+
+Authentication: optional.
+
+Response:
+
+```json
+{
+  "game": {
+    "id": "maze",
+    "name": "Maze Arena",
+    "gameVersion": "1.0.0",
+    "rendererVersion": 1,
+    "modes": ["tutorial", "practice", "pvp", "ranked", "house_challenge", "daily_challenge", "tournament"],
+    "availability": "available"
+  }
+}
+```
+
+Errors:
+
+- `GAME_NOT_FOUND` (`404`).
+- `GAME_VERSION_UNAVAILABLE` (`409`).
+- `RATE_LIMITED` (`429`).
+
+Validation: `gameId` uses the registry ID format; only an approved player-visible version and modes are returned.
+
+Maze enters gameplay through the frozen Sprint 5 Realtime API. Phase 4 adds game fields and opaque module payloads to those existing routes; it does not create a competing session, queue, snapshot, leave, reconnect, event, gateway, or replay API.
+
+###### `POST /api/v1/realtime/queue`
+
+Purpose: enter Practice, PvP, Ranked, or an approved platform-directed match flow through existing matchmaking.
+
+Authentication: required; verified, active player session.
+
+Headers:
+
+- `Content-Type: application/json`.
+- `X-CSRF-Token` for browser mutation.
+- `Idempotency-Key` required.
+
+Request:
+
+```json
+{
+  "gameId": "maze",
+  "mode": "practice",
+  "modeReference": null,
+  "clientCapabilities": {
+    "rendererVersion": 1,
+    "reducedMotion": false
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "queueId": "que_01...",
+  "gameId": "maze",
+  "mode": "practice",
+  "status": "preparing",
+  "matchId": "mat_01...",
+  "gatewayPath": "/api/v1/realtime/gateway"
+}
+```
+
+Errors:
+
+- `AUTH_REQUIRED` (`401`).
+- `EMAIL_VERIFICATION_REQUIRED` (`403`).
+- `GAME_NOT_FOUND` (`404`).
+- `GAME_MODE_UNSUPPORTED` (`422`).
+- `GAME_MODE_INELIGIBLE` (`403`).
+- `GAME_VERSION_UNAVAILABLE` (`409`).
+- `PUZZLE_GENERATION_UNAVAILABLE` (`503`).
+- `IDEMPOTENCY_KEY_REQUIRED` (`400`).
+- `IDEMPOTENCY_CONFLICT` (`409`).
+- `RATE_LIMITED` (`429`).
+
+Validation:
+
+- The server resolves all game, generator, rules, profile, and match versions.
+- The server resolves Difficulty Profile from mode and player/platform policy.
+- The client cannot submit seed, level internals, profile, board, opponent, priority, stake outcome, or authoritative state.
+- Repeating an idempotency key with the same request returns the original queue/match result.
+- Tournament, House, and Daily entry continues through their owning platform lifecycle before it delegates the approved match request to Realtime Arena.
+
+###### `GET /api/v1/realtime/queue`
+
+Purpose: recover the player's latest authoritative queue or preparation state.
+
+Authentication: required.
+
+Request: no body.
+
+Response:
+
+```json
+{
+  "queueId": "que_01...",
+  "gameId": "maze",
+  "mode": "practice",
+  "status": "preparing",
+  "matchId": "mat_01...",
+  "gatewayPath": "/api/v1/realtime/gateway"
+}
+```
+
+Errors:
+
+- `QUEUE_NOT_FOUND` (`404`).
+- `GAME_VERSION_UNAVAILABLE` (`409`).
+- `RATE_LIMITED` (`429`).
+
+Validation: the queue is resolved from the authenticated player; no player ID query parameter is accepted.
+
+###### `DELETE /api/v1/realtime/queue`
+
+Purpose: cancel an active queue entry before authoritative match start.
+
+Authentication: required.
+
+Headers: `X-CSRF-Token` and `Idempotency-Key`.
+
+Request: no body.
+
+Response:
+
+```json
+{
+  "queueId": "que_01...",
+  "status": "cancelled"
+}
+```
+
+Errors:
+
+- `QUEUE_NOT_FOUND` (`404`).
+- `MATCH_ALREADY_STARTED` (`409`).
+- `IDEMPOTENCY_KEY_REQUIRED` (`400`).
+- `RATE_LIMITED` (`429`).
+
+Validation: only the authenticated player's active queue entry may be cancelled; duplicate cancellation returns the original terminal result.
+
+###### `GET /api/v1/realtime/matches/{matchId}`
+
+Purpose: recover owned match status and a full viewer-safe game snapshot.
+
+Authentication: required; owning participant or an explicitly authorized viewer through the applicable spectator/reviewer policy.
+
+Response:
+
+```json
+{
+  "matchId": "mat_01...",
+  "gameId": "maze",
+  "mode": "practice",
+  "status": "ready",
+  "gameVersion": "1.0.0",
+  "rendererVersion": 1,
+  "stateVersion": 12,
+  "serverSequence": 104,
+  "snapshot": {
+    "schemaVersion": 1,
+    "board": {},
+    "progress": {}
+  },
+  "checksum": "sha256:...",
+  "gatewayPath": "/api/v1/realtime/gateway"
+}
+```
+
+Errors:
+
+- `MATCH_FORBIDDEN` (`403`).
+- `MATCH_NOT_FOUND` (`404`).
+- `MATCH_EXPIRED` (`410`).
+- `SNAPSHOT_NOT_READY` (`409`).
+- `STATE_INTEGRITY_FAILURE` (`503`).
+
+Validation: ownership and viewer role are resolved server-side; `snapshot` remains opaque to the generic handler and is validated against the pinned renderer schema.
+
+###### `POST /api/v1/realtime/matches/{matchId}/ready`
+
+Purpose: declare renderer readiness after the authoritative puzzle is assigned and the initial snapshot is accepted.
+
+Authentication: required; owning participant.
+
+Request:
+
+```json
+{
+  "rendererVersion": 1,
+  "snapshotChecksum": "sha256:..."
+}
+```
+
+Response:
+
+```json
+{
+  "matchId": "mat_01...",
+  "participantStatus": "ready",
+  "matchStatus": "ready",
+  "startsAt": null
+}
+```
+
+Errors:
+
+- `MATCH_FORBIDDEN` (`403`).
+- `MATCH_NOT_READY` (`409`).
+- `RENDERER_VERSION_UNSUPPORTED` (`409`).
+- `SNAPSHOT_CHECKSUM_MISMATCH` (`409`).
+
+Validation: renderer version must be compatible with the pinned match version and the checksum must match the delivered viewer snapshot. The client cannot start the match clock; Realtime Arena starts according to authoritative readiness and lifecycle policy.
+
+###### `POST /api/v1/realtime/matches/{matchId}/leave`
+
+Purpose: request leave or forfeit through the existing authoritative match lifecycle.
+
+Authentication: required; owning participant.
+
+Headers: `X-CSRF-Token` and `Idempotency-Key`.
+
+Response:
+
+```json
+{
+  "matchId": "mat_01...",
+  "status": "forfeited"
+}
+```
+
+For Practice, status may be `abandoned`. Existing platform rules decide competitive forfeit and settlement consequences.
+
+Errors:
+
+- `MATCH_FORBIDDEN` (`403`).
+- `MATCH_NOT_FOUND` (`404`).
+- `MATCH_ALREADY_COMPLETE` (`409`).
+- `IDEMPOTENCY_KEY_REQUIRED` (`400`).
+
+Validation: only the authenticated participant may leave; repeated requests return the persisted terminal result. Competitive status and consequences are server-derived.
+
+###### `POST /api/v1/realtime/matches/{matchId}/reconnect`
+
+Purpose: recover from the last acknowledged server sequence and state version.
+
+Authentication: required; owning participant.
+
+Request:
+
+```json
+{
+  "lastServerSequence": 100,
+  "lastStateVersion": 11,
+  "lastSnapshotChecksum": "sha256:..."
+}
+```
+
+Response:
+
+```json
+{
+  "matchId": "mat_01...",
+  "status": "live",
+  "stateVersion": 12,
+  "serverSequence": 104,
+  "snapshot": {},
+  "events": [],
+  "checksum": "sha256:..."
+}
+```
+
+Errors:
+
+- `MATCH_FORBIDDEN` (`403`).
+- `MATCH_NOT_FOUND` (`404`).
+- `RECONNECT_WINDOW_EXPIRED` (`410`).
+- `STATE_INTEGRITY_FAILURE` (`503`).
+
+Validation: sequence and version must be non-negative and cannot exceed authoritative values. A missing or mismatched checksum forces a full viewer-safe snapshot.
+
+###### `POST /api/v1/realtime/matches/{matchId}/heartbeat`
+
+Purpose: preserve existing connection presence and return authoritative server time.
+
+Authentication: required; owning participant.
+
+Request:
+
+```json
+{
+  "lastServerSequence": 104
+}
+```
+
+Response:
+
+```json
+{
+  "matchId": "mat_01...",
+  "presence": "online",
+  "serverTime": "2026-07-28T12:00:02Z",
+  "serverSequence": 104
+}
+```
+
+Errors:
+
+- `MATCH_FORBIDDEN` (`403`).
+- `MATCH_NOT_FOUND` (`404`).
+- `HEARTBEAT_RATE_LIMITED` (`429`).
+
+Validation: sequence is non-negative and membership is server-resolved. Maze adds no heartbeat fields or timing authority.
+
+###### `GET /api/v1/realtime/events/{matchId}?after={sequence}`
+
+Purpose: return an authorized ordered event delta using existing Realtime persistence.
+
+Authentication: required; owning participant or approved viewer.
+
+Request: no body. `after` is a required non-negative sequence. The existing bounded server limit applies.
+
+Response:
+
+```json
+{
+  "matchId": "mat_01...",
+  "events": [],
+  "nextSequence": null,
+  "eventRoot": "sha256:..."
+}
+```
+
+Errors:
+
+- `MATCH_FORBIDDEN` (`403`).
+- `MATCH_NOT_FOUND` (`404`).
+- `EVENT_SEQUENCE_INVALID` (`422`).
+- `EVENT_INTEGRITY_FAILURE` (`503`).
+
+Validation: event visibility is filtered by viewer role and pinned renderer schema. A sequence beyond the current committed sequence is rejected.
+
+###### `GET /api/v1/realtime/replays/{matchId}`
+
+Purpose: return signed replay metadata and authorized renderer-safe replay events for an owned terminal match through existing replay infrastructure.
+
+Authentication: required unless future platform policy explicitly publishes the replay.
+
+Response:
+
+```json
+{
+  "replayId": "rpl_01...",
+  "matchId": "mat_01...",
+  "gameId": "maze",
+  "gameVersion": "1.0.0",
+  "replayVersion": 1,
+  "rendererVersion": 1,
+  "verificationStatus": "verified",
+  "outcome": "completed",
+  "eventCount": 84,
+  "events": [],
+  "eventRoot": "sha256:...",
+  "startedAt": "2026-07-28T12:00:00Z",
+  "completedAt": "2026-07-28T12:02:04Z"
+}
+```
+
+Errors:
+
+- `REPLAY_NOT_FOUND` (`404`).
+- `REPLAY_FORBIDDEN` (`403`).
+- `REPLAY_NOT_READY` (`409`).
+- `REPLAY_UNDER_REVIEW` (`409`).
+- `REPLAY_VERSION_UNAVAILABLE` (`503`).
+- `REPLAY_INTEGRITY_FAILURE` (`503`).
+
+Validation: `matchId` must identify a terminal match visible to the authenticated viewer. Seed references, canonical solution, signing internals, and opponent-private data are never returned.
+
+###### `GET /api/v1/realtime/gateway`
+
+Purpose: upgrade to the existing authenticated WebSocket protocol.
+
+Authentication: required through the frozen cookie/session flow and approved origin.
+
+Request: HTTP WebSocket upgrade with no JSON body.
+
+Response: `101 Switching Protocols`, followed by the frozen connection acknowledgement and generic event protocol.
+
+Errors:
+
+- `AUTH_REQUIRED` (`401`).
+- `SESSION_REVOKED` (`401`).
+- `ORIGIN_NOT_ALLOWED` (`403`).
+- `REALTIME_CONNECTION_EXISTS` (`409`).
+- `REALTIME_CONNECTION_RATE_LIMITED` (`429`).
+- `REALTIME_UNAVAILABLE` (`503`).
+
+Validation: session, origin, one-active-connection policy, message-size limit, heartbeat deadlines, and connection throttles remain owned by Sprint 5. Maze adds only generic `game.action` and `game.sync.request` message kinds described below. It does not add a second gateway or Maze-specific socket.
+
+##### Internal Service Contracts
+
+Puzzle generation is not a public API. Realtime Arena and approved platform mode coordinators call a typed internal `PuzzleService`:
+
+```text
+Generate(context, GenerationRequest) -> ValidatedPuzzle
+Claim(context, PuzzleReference, AssignmentScope) -> PuzzleAssignment
+Load(context, PuzzleID) -> PuzzleMetadata
+Regenerate(context, PuzzleMetadata) -> CanonicalPuzzle
+Verify(context, PuzzleMetadata) -> VerificationReport
+```
+
+Rules:
+
+- `Generate` performs CPU work outside a database transaction.
+- `Claim` performs the short uniqueness and assignment transaction.
+- A generated candidate is not deliverable until `Claim` commits.
+- Internal requests carry authenticated service identity and correlation IDs.
+- No Admin CRM endpoint can author or alter a puzzle, seed, solution, or validation result.
+
+##### Realtime Event Contracts
+
+The frozen gateway retains authentication, connection ownership, heartbeats, resume, sequence, and generic event persistence. Phase 4 specifies additive generic events. Every envelope contains:
+
+```json
+{
+  "type": "game.event",
+  "eventId": "evt_01...",
+  "matchId": "mat_01...",
+  "gameId": "maze",
+  "serverSequence": 104,
+  "stateVersion": 13,
+  "occurredAt": "2026-07-28T12:00:01.250Z",
+  "kind": "game.action.accepted",
+  "payload": {}
+}
+```
+
+Generic gateway fields do not contain Maze geometry. The selected module owns and schema-validates opaque `payload`.
+
+###### Client-To-Server Messages
+
+| Type | Purpose | Required controls |
+|---|---|---|
+| `game.action` | Submit one player intent | Auth, membership, action ID, client sequence, expected state version, size/schema limit, rate limit |
+| `game.sync.request` | Request authoritative recovery snapshot | Auth, viewer permission, last server sequence, last state version |
+| `match.leave` | Leave or forfeit | Auth, membership, idempotency, platform lifecycle rules |
+
+Maze action payload:
+
+```json
+{
+  "type": "game.action",
+  "matchId": "mat_01...",
+  "actionId": "act_01...",
+  "clientSequence": 17,
+  "expectedStateVersion": 12,
+  "action": {
+    "kind": "arrow.click",
+    "payload": {"arrowId": "arrow_23"}
+  }
+}
+```
+
+The server ignores client time for ordering and never accepts client direction, collision, blocker, progress, score, completion, winner, board, seed, or resulting state.
+
+###### Server-To-Client Events
+
+| Event kind | Audience | Required payload |
+|---|---|---|
+| `match.started` | Participants and authorized spectators | Match/game/version identifiers, mode, authoritative start/deadline, participant-safe metadata |
+| `game.puzzle.ready` | Participant/viewer-specific | Renderer version, immutable client-safe board, puzzle hash commitment, initial state version |
+| `game.action.accepted` | Actor; sanitized progress may reach opponent/spectator | Action ID, resulting state version, authoritative presentation transition |
+| `game.action.rejected` | Actor only unless integrity policy requires review | Action ID, stable code, unchanged state version, blocked presentation when applicable |
+| `game.progress.updated` | Participant-safe audiences | Participant reference, completion percent, combo/progress fields allowed by mode policy |
+| `game.snapshot` | Requesting viewer | Renderer version, state/server sequence, viewer-safe snapshot, checksum |
+| `game.sync.required` | Affected connection | Stable reason, expected sequence/state, snapshot instruction |
+| `match.completed` | Participants and authorized spectators | Server outcome, completion reason, final timing, replay pending status |
+| `replay.ready` | Replay-authorized users | Replay ID, verification status, retrieval reference |
+| `match.invalidated` | Authorized participants/reviewers | Stable reason category, review state; no sensitive anti-cheat evidence |
+
+Ordering and delivery:
+
+- Events use monotonic per-match server sequence.
+- State-changing events commit atomically with state and action receipt.
+- Delivery is at least once; clients deduplicate by event ID and sequence.
+- Duplicate actions return the original persisted result.
+- A sequence gap or checksum mismatch requires `game.sync.request`.
+- No event emitted before transaction commit is authoritative.
+- Opponent payloads are filtered by mode and viewer role.
+- `replay.ready` is emitted only after replay persistence and initial integrity verification.
+
+Stable action result codes:
+
+- `ACTION_ACCEPTED`.
+- `ACTION_BLOCKED`.
+- `ACTION_INVALID`.
+- `ACTION_DUPLICATE`.
+- `ACTION_SEQUENCE_GAP`.
+- `ACTION_STATE_CONFLICT`.
+- `ACTION_RATE_LIMITED`.
+- `MATCH_NOT_READY`.
+- `MATCH_COMPLETE`.
+- `MATCH_FORFEITED`.
+- `GAME_VERSION_UNAVAILABLE`.
+- `STATE_INTEGRITY_FAILURE`.
+
+##### Database Migration Blueprint
+
+Sprint 6 implementation uses additive, ordered PostgreSQL migrations. No existing frozen table or column is renamed, dropped, or reinterpreted.
+
+Proposed migration sequence:
+
+1. `game_module_versions`.
+2. `game_generator_versions`.
+3. `game_difficulty_profiles`.
+4. `game_puzzles`.
+5. `game_difficulty_analyses`.
+6. `game_puzzle_uniqueness_claims`.
+7. `game_puzzle_assignments`.
+8. `game_participant_states`.
+9. `game_action_receipts`.
+10. `game_replay_metadata`.
+11. Foreign keys from new tables to existing Realtime records.
+12. Approved tutorial fixtures and version registration as controlled seed data.
+
+Migrations are transactional where PostgreSQL permits, forward-only in production, reversible in an empty/non-production verification database, and validated from both a clean database and the current frozen schema.
+
+###### `game_module_versions`
+
+Primary key:
+
+- Complete identity across `game_id`, `game_version`, `rules_version`, `protocol_version`, `replay_version`, and `renderer_version`.
+
+Constraints:
+
+- Non-empty normalized game ID.
+- Semantic game version.
+- Positive integer protocol/schema versions.
+- Allowed status: `active`, `replay_only`, `retired`, `revoked`.
+- `new_match_allowed` is false unless status is `active`.
+- Manifest hash and artifact digest are fixed-length canonical digests.
+- Referenced versions cannot be deleted.
+
+Indexes:
+
+- Active version lookup by game ID.
+- Historical compatibility tuple lookup.
+- Manifest hash uniqueness.
+
+###### `game_generator_versions`
+
+Primary key:
+
+- Game ID plus generator, solver, validator, analyzer, Difficulty Profile schema, and canonical encoding versions.
+
+Constraints:
+
+- Every version component is positive and immutable after first puzzle use.
+- Allowed status: `qualification`, `active`, `replay_only`, `retired`, `revoked`.
+- Determinism fixture hash and artifact digest are required before activation.
+
+Indexes:
+
+- Active tuple by game ID and profile schema.
+- Artifact digest.
+- Status and release time.
+
+###### `game_difficulty_profiles`
+
+Primary key: immutable profile ID.
+
+Foreign key: game/module version identity using restrictive deletion.
+
+Constraints:
+
+- Canonical profile data validates against its schema version.
+- Profile hash is unique per game and schema version.
+- Source is one of `practice`, `ranked`, `house`, `daily`, `tournament`, `tutorial`, or approved internal calibration.
+- Created profiles are immutable.
+
+Indexes:
+
+- Game, schema version, source.
+- Profile hash.
+
+###### `game_puzzles`
+
+Primary key: puzzle ID.
+
+Foreign keys:
+
+- Complete generator version tuple.
+- Requested Difficulty Profile.
+- Optional accepted difficulty analysis, added after analysis persistence.
+
+Constraints:
+
+- Seed ciphertext/reference is required; plaintext seed is prohibited.
+- Fixed-length seed, generation, puzzle, validation, and solution hashes.
+- Status transitions: `generating` -> `validated` -> `assigned` -> `consumed`; rejection and retirement are terminal for assignment.
+- Validated status requires all immutable hashes, minimum actions, validation timestamp, and accepted analysis.
+- Immutable generation inputs and hashes after validation.
+
+Indexes:
+
+- Status, game ID, mode, and created time for private pool claims.
+- Puzzle hash.
+- Seed hash.
+- Generator tuple.
+- Difficulty Profile.
+
+###### `game_difficulty_analyses`
+
+Primary key: analysis ID.
+
+Foreign key: puzzle ID with restrictive deletion.
+
+Constraints:
+
+- One authoritative accepted analysis per puzzle/analyzer version.
+- Canonical measured fields and analysis hash are immutable.
+- Rejection reasons use bounded stable codes.
+
+Indexes:
+
+- Puzzle and analyzer version.
+- Accepted/profile classification.
+- Analysis hash.
+
+###### `game_puzzle_uniqueness_claims`
+
+Primary key: claim ID or puzzle ID according to repository implementation.
+
+Foreign key: puzzle ID with restrictive deletion.
+
+Constraints:
+
+- Unique `seed_hash` for one-use policies.
+- Unique `puzzle_hash` for one-use policies.
+- Allowed reuse policy: `one_use`, `tutorial_fixture`, `daily_window`.
+- One-use claims have exactly one first scope.
+- Tutorial/daily reuse requires an explicit immutable scope policy.
+
+Indexes:
+
+- Unique partial indexes for one-use seed hash and puzzle hash.
+- Scope type plus scope ID.
+- Claim time for integrity review.
+
+###### `game_puzzle_assignments`
+
+Primary key: assignment ID.
+
+Foreign keys:
+
+- Puzzle ID.
+- Existing match/session/challenge reference according to scope type.
+
+Constraints:
+
+- One assignment per PvP or tournament match.
+- One fresh assignment per Practice or House attempt.
+- Assignment reuse policy equals the puzzle claim policy.
+- Assignment cannot precede puzzle validation.
+- Consumed time cannot precede assignment time.
+
+Indexes:
+
+- Unique scope type plus scope ID where policy requires one assignment.
+- Puzzle ID.
+- Mode and assignment time.
+
+###### `game_participant_states`
+
+Primary key: match ID plus user ID.
+
+Foreign keys:
+
+- Existing Realtime match.
+- Existing participant/user.
+- Puzzle assignment.
+
+Constraints:
+
+- Opaque canonical state validates against pinned state schema version.
+- State version and server sequence are non-negative and monotonic through compare-and-swap.
+- State checksum is required.
+- Allowed status: `ready`, `active`, `completed`, `forfeited`, `timed_out`, `invalid`, `under_review`.
+
+Indexes:
+
+- Match and status.
+- User and updated time.
+- Puzzle assignment.
+
+###### `game_action_receipts`
+
+Primary key: action ID.
+
+Foreign keys: match and participant state.
+
+Constraints:
+
+- Unique match ID, user ID, and client sequence.
+- State version after equals state version before for rejection.
+- Accepted actions advance state according to transition contract.
+- Result code, canonical payload hash, receipt hash, and processing times are required.
+- Receipt is immutable after transaction commit.
+
+Indexes:
+
+- Match and server event sequence range.
+- Participant and client sequence.
+- Processed time for operations review.
+
+###### `game_replay_metadata`
+
+Primary/foreign key: replay ID referencing existing `realtime_replays`.
+
+Foreign keys: puzzle, complete module version, and complete generator version.
+
+Constraints:
+
+- One row per Realtime replay.
+- Final replay hash and signing key ID required for `verified`.
+- Verification status: `pending`, `verified`, `failed`, `under_review`.
+- Version, seed reference, hashes, outcome, and signing evidence are immutable after verification.
+
+Indexes:
+
+- Match/replay lookup through existing replay relationship.
+- Puzzle ID.
+- Verification status and time.
+- Replay hash.
+
+##### Transaction Boundaries
+
+Generation transaction:
+
+```text
+Create generation job metadata
+  -> Commit
+  -> Generate/Solve/Validate/Analyze/Hash outside lock and transaction
+  -> Begin short transaction
+  -> Insert puzzle metadata
+  -> Insert accepted analysis
+  -> Claim seed and puzzle uniqueness
+  -> Create assignment
+  -> Commit
+```
+
+Action transaction:
+
+```text
+Resolve participant state
+  -> Lock participant row or compare state version
+  -> Detect duplicate action
+  -> Validate and apply through pinned module
+  -> Insert immutable action receipt
+  -> Update participant state
+  -> Append hash-chained Realtime events
+  -> Commit
+  -> Deliver committed result
+```
+
+Completion transaction:
+
+```text
+Persist final participant state
+  -> Determine authoritative match outcome
+  -> Append completion event
+  -> Mark match complete
+  -> Queue replay finalization
+  -> Commit
+```
+
+Puzzle CPU work, replay reconstruction, rendering projection, and network delivery never occur while holding a global store lock.
+
+##### Testing Strategy And Pass Criteria
+
+###### Unit Tests
+
+Required:
+
+- Registry registration, duplicate rejection, compatibility, retirement, and historical resolution.
+- Canonical encoding and every hash.
+- Seed derivation and deterministic random vectors.
+- Every arrow direction, boundary, collision ray, and nearest blocker.
+- Immutable state transitions.
+- Pattern selection and candidate ranking.
+- Dependency derivation.
+- Solver unique/multiple/deadlock classification.
+- Validator gate ordering and failure codes.
+- Difficulty features and tolerance boundaries.
+- Replay codec and reconstruction.
+- Renderer visibility filtering.
+- API and event schema validation.
+
+Pass criteria:
+
+- Zero failures.
+- Race-enabled Go tests pass for stateful packages.
+- Critical authority packages (`engine`, `generator`, `solver`, `validator`, `replay`) achieve at least 95% statement coverage and 90% branch-equivalent decision coverage measured by the approved Go coverage tooling and review.
+- Every stable error code has a test.
+
+###### Property And Fuzz Tests
+
+Required:
+
+- Identical versioned input always produces identical bytes and hashes.
+- Every accepted puzzle is solvable through live engine rules.
+- State versions and event sequences never decrease.
+- Removing an arrow never introduces a blocker.
+- Canonical encode/decode round trips.
+- Malformed geometry, actions, metadata, events, and replay payloads fail closed.
+
+Pass criteria:
+
+- Property suites run at least 10,000 generated cases per approved profile band in CI qualification jobs.
+- Go fuzz seed corpus is checked in without secrets.
+- Release qualification completes a minimum 30-minute fuzz run per parser/decoder target with no crash, hang, race, or accepted invalid state.
+
+###### Integration Tests
+
+Required:
+
+- Registry -> module -> generator -> solver -> validator -> PostgreSQL claim -> assignment.
+- Concurrent uniqueness claims.
+- Participant action transaction with receipt and Realtime event.
+- Duplicate action idempotency.
+- Sequence-gap and stale-state recovery.
+- Reconnect from snapshot plus later events.
+- Shared PvP assignment with independent state.
+- Practice and House uniqueness.
+- Daily controlled reuse.
+- Tournament per-match uniqueness.
+- Replay persistence, object storage delivery, and verification.
+- PostgreSQL rollback, Redis degradation, worker retry, and object-storage failure.
+
+Pass criteria:
+
+- Tests run against real PostgreSQL and Redis-compatible services in CI.
+- S3-compatible integration uses an isolated real service such as MinIO, not a mocked SDK.
+- No partial assignment, state, receipt, or replay remains after an injected transaction failure.
+- All retries are idempotent.
+
+###### End-To-End Tests
+
+Required player journeys:
+
+1. Authenticated player opens Game Hub, starts Practice, receives a generated puzzle, acts, reconnects, completes, and watches the verified replay.
+2. Two authenticated players queue, receive one shared puzzle, act independently, disconnect/reconnect, complete, receive one authoritative outcome, and access replay.
+3. Tutorial player completes fixtures 1 through 5 in order.
+4. House participant receives a one-use puzzle through existing eligibility.
+5. Daily participants share only the approved daily assignment.
+6. Tournament match participants share one puzzle while a second match receives another.
+7. Spectator receives only permitted data.
+
+Pass criteria:
+
+- Chromium desktop, tablet, and mobile pass.
+- Critical renderer and interaction checks also pass in Firefox and WebKit.
+- Screenshots/video evidence shows loading, ready, accepted, blocked, reconnecting, completed, replay, error, and reduced-motion states.
+- No client request can forge score, completion, winner, state, seed, or difficulty.
+
+###### Replay Determinism Tests
+
+Required:
+
+- Regenerate from exact metadata on every supported OS/architecture build target.
+- Apply authoritative ordered actions.
+- Compare puzzle, validation, state, event-root, outcome, and replay hashes.
+- Verify signature and key ID.
+- Corrupt each protected input independently.
+
+Pass criteria:
+
+- 100% equality for approved golden vectors.
+- 100% of qualification corpus sample replays reconstruct.
+- Every corruption case fails verification with no historical mutation.
+
+###### Load And Soak Tests
+
+Required:
+
+- Concurrent puzzle generation by profile class.
+- 100 simultaneous match preparations.
+- 100 simultaneous live PvP matches with representative action rates.
+- Practice bursts.
+- Puzzle-pool claim contention.
+- Replay reconstruction bursts.
+- Reconnect storms.
+- Worker restart and queue recovery.
+- PostgreSQL uniqueness conflicts and Redis unavailability.
+- Minimum two-hour steady-state soak and an extended pre-launch soak on target infrastructure.
+
+Pass criteria:
+
+- No duplicate assignment, lost accepted action, divergent participant state, unsigned replay, goroutine leak, unbounded queue growth, or integrity failure.
+- Error rate below 0.1% excluding intentional validation rejections and injected failures.
+- All accepted requests satisfy final service-level targets below.
+- Recovery returns queues and active sessions to a consistent state.
+
+###### Security Tests
+
+Required:
+
+- Unauthorized session, match, snapshot, spectator, and replay access.
+- Cross-player action submission.
+- Action replay, duplicate sequence, stale state, oversized payload, malformed schema, and rate-limit abuse.
+- Seed/solution leakage review across responses, logs, traces, analytics, object metadata, and client bundles.
+- Manifest/version tampering.
+- Hash and signature corruption.
+- Service identity and repository privilege enforcement.
+
+Pass criteria:
+
+- All unauthorized and malformed flows fail closed with stable non-sensitive errors.
+- No secret seed, canonical solution, signing material, or opponent-private state is disclosed.
+- Static analysis, dependency scanning, secret scanning, and race detection pass.
+
+##### Measurable Performance Targets
+
+Targets are measured on the approved Release 1.0 reference infrastructure with production-like PostgreSQL, Redis, S3-compatible storage, TLS, representative telemetry, and release builds. Measurements report P50, P95, P99, throughput, errors, CPU, memory, queue wait, and database time separately.
+
+| Operation | Acceptance target |
+|---|---|
+| Tutorial fixture load and validation | P99 under 50 ms |
+| Standard Practice/PvP generation pipeline | P50 under 100 ms, P95 under 500 ms, P99 under 1.5 s |
+| Advanced Ranked/House generation pipeline | P50 under 300 ms, P95 under 1.5 s, P99 under 3 s |
+| Elite Tournament generation pipeline | P50 under 750 ms, P95 under 3 s, P99 under 5 s |
+| Standard solver only | P95 under 150 ms, P99 under 500 ms |
+| Advanced solver only | P95 under 750 ms, P99 under 1.5 s |
+| Replay reconstruction, standard profile | P95 under 500 ms, P99 under 1 s |
+| Replay reconstruction, elite profile | P95 under 2 s, P99 under 5 s |
+| Accepted action processing, excluding client network | P95 under 50 ms, P99 under 100 ms |
+| Blocked action processing | P95 under 30 ms, P99 under 75 ms |
+| Snapshot recovery from current durable state | P95 under 250 ms, P99 under 750 ms |
+| Prepared-pool puzzle claim | P95 under 100 ms, P99 under 250 ms |
+| Standard match preparation without pool | P95 under 2 s, P99 under 5 s |
+| Match start after both players ready and puzzle prepared | P95 under 250 ms, P99 under 500 ms |
+| Replay-ready after match completion | P95 under 2 s, P99 under 5 s |
+
+Capacity acceptance:
+
+- At least 100 concurrent standard puzzle-generation jobs without violating P99 or integrity targets on the declared reference deployment.
+- At least 100 concurrent live PvP matches at representative action rate with no lost or duplicated authoritative action.
+- Horizontal worker scaling produces documented throughput improvement without changing output selection.
+- Queue depth remains bounded and oldest high-priority live-match job remains within its match-preparation target.
+
+Hard deadlines remain:
+
+- Standard generation: 5 seconds.
+- Elite/Tournament generation: 10 seconds.
+- Deadline failure never lowers difficulty, changes rules, or returns an unvalidated puzzle.
+
+Final thresholds may be tightened after measurement. They may not be weakened merely to pass testing without documented product and architecture approval.
+
+##### Sprint 6 Definition Of Done
+
+Sprint 6 Maze Arena is complete only when all statements are true:
+
+Architecture and modularity:
+
+- Maze is registered through the generic Games Platform.
+- Realtime Arena contains no Maze-specific import, payload, switch, storage, or rule.
+- A test-only second module passes the same contract without Realtime changes.
+- Complete immutable version tuples are pinned for matches and replays.
+
+Generation and integrity:
+
+- Tutorial 1 through 5 are the only handcrafted production fixtures.
+- Every non-tutorial puzzle is server-generated.
+- Generator output is deterministic for exact versioned input.
+- Every puzzle passes solver, validator, measured difficulty, hashing, and uniqueness before delivery.
+- Database constraints prevent prohibited seed or puzzle reuse.
+- No global store lock surrounds generation, solving, validation, analysis, hashing, or replay reconstruction.
+
+Mode behavior:
+
+- Practice and House receive fresh one-use puzzles.
+- PvP and Ranked participants receive one identical shared puzzle and independent state.
+- Each Tournament match receives its own puzzle.
+- Daily Challenge reuse is explicit and limited to its approved window.
+
+Gameplay authority:
+
+- The server alone validates actions, collision, progress, combo, completion, timing, and winner.
+- The client sends only authorized intent.
+- Blocked arrows remain on the board and authoritative presentation explains the collision.
+- Only arrows that fully escape are removed.
+- Disconnect, timeout, forfeit, and reconnect use frozen Realtime lifecycle rules.
+
+Replay:
+
+- Replays regenerate from exact historical metadata.
+- Ordered authoritative actions reproduce state and outcome.
+- Puzzle, validation, event-root, state, outcome, and replay hashes verify.
+- Platform signature verifies.
+- Corruption or unavailable history fails closed into review.
+
+Product quality:
+
+- Renderer is responsive and accessible.
+- Accepted and blocked actions are visually understandable.
+- Loading, generation, reconnect, stale state, completion, replay, reduced-motion, and failure states are complete.
+- No placeholder UI, fake statistics, mock production service, baked post-tutorial catalogue, or client-generated puzzle exists.
+
+Verification:
+
+- Unit, property, fuzz, integration, E2E, replay, security, regression, load, and soak tests pass.
+- The 100,000-candidate qualification corpus has zero accepted invalid puzzle, deadlock, structural violation, or duplicate one-use assignment.
+- Performance targets are met on documented reference infrastructure.
+- Builds, formatting, linting, static analysis, race detection, dependency scanning, and secret scanning pass.
+- README contracts and implementation match.
+
+##### Sprint 6 Freeze Criteria
+
+Before a freeze recommendation, the final Sprint 6 report must provide:
+
+1. Commit SHA and complete changed-file inventory.
+2. Exact module manifest and compatibility tuple.
+3. Database migration list, clean-install result, frozen-schema upgrade result, constraint tests, and rollback evidence.
+4. API and Realtime contract tests with request, response, event, and stable error evidence.
+5. Generator qualification report covering at least 100,000 candidates.
+6. Solver correctness and malformed/deadlock rejection evidence.
+7. Uniqueness concurrency evidence for Practice, House, PvP, Ranked, Daily, and Tournament policies.
+8. Deterministic replay report across supported build targets.
+9. PvP proof showing one puzzle hash and two independent state histories.
+10. Desktop, tablet, mobile, Firefox, WebKit, accessibility, and reduced-motion evidence.
+11. Performance benchmark, load, stress, reconnect-storm, and soak reports.
+12. Security review covering zero-trust actions, seed secrecy, authorization, rate limits, hashes, signatures, dependencies, and secrets.
+13. Failure-path evidence for PostgreSQL, Redis, object storage, worker, connection, and generation failure.
+14. Observability evidence for generation, validation rejection, queue, match, action, replay, integrity, and version metrics.
+15. Full Sprint 1 through Sprint 5 regression results.
+16. Confirmation that no Admin CRM, Wallet, Treasury, matchmaking, auth, or Realtime business rule was duplicated inside Maze.
+17. List of every unresolved defect categorized Critical, High, Medium, or Low.
+18. Explicit freeze recommendation.
+
+Freeze is prohibited when:
+
+- Any Critical or High defect remains.
+- Any authority exists on the client.
+- Any generated production puzzle can bypass validation.
+- Puzzle reuse violates the permanent policy.
+- Replay reconstruction or signature verification is incomplete.
+- PvP puzzle equality or participant-state independence is not proven.
+- Performance or load evidence is missing.
+- Frozen Sprint 1 through Sprint 5 regress.
+- Documentation and implementation differ.
+
+After approval and freeze:
+
+- Create a dedicated Sprint 6 freeze commit and annotated tag only after all evidence passes.
+- Maze changes become limited to bug fixes, security fixes, performance/scalability improvements, approved renderer polish, and backward-compatible integration support.
+- Rules, generator, solver, validator, protocol, replay, renderer, and state changes require new immutable versions rather than mutation of historical behavior.
+
+##### Phase 4 Definition Of Done
+
+Documentation deliverables are complete:
+
+- Final Games Platform and Maze folder structure.
+- Ownership and dependency boundaries.
+- Permanent Architecture Protection Rule for frozen Sprint 1 through Sprint 5 business logic.
+- Module manifest blueprint.
+- Nine implementation phases with mandatory build, test, validation, report, review, and approval gates.
+- Mandatory per-phase validation report and evidence schema.
+- Public REST API requests, responses, validation, and errors.
+- Internal Puzzle Service contract.
+- Generic Realtime client/server event contracts.
+- Additive migration sequence, tables, indexes, constraints, and foreign keys.
+- Transaction boundaries.
+- Unit, property, fuzz, integration, E2E, replay, load, soak, and security strategy.
+- Measurable latency and capacity acceptance targets.
+- Sprint 6 Definition of Done.
+- Complete freeze evidence and prohibition criteria.
+
+No production gameplay code, migration, API, worker, React component, CSS, or frozen Sprint 1 through Sprint 5 implementation was changed during Phase 4.
+
+Phase 4 is **APPROVED**.
+
+Sprint 6 is **READY TO BEGIN IMPLEMENTATION PHASE 1**.
+
+Implementation Phase 1 is authorized. Implementation Phases 2 through 9 remain **NOT STARTED**.
 
 ### Sprint 7: Tournaments, Leaderboards, Seasons, And Rewards
 
@@ -5117,7 +9366,7 @@ Join:
 3. Stake is locked.
 4. Redis lock coordinates compatible queue access.
 5. Backend matches two compatible players.
-6. Backend derives separate puzzle seeds.
+6. Backend derives one shared puzzle seed for the match and creates independent player board states.
 7. Match becomes active.
 
 Progress:
@@ -6129,7 +10378,7 @@ PvP flow:
 3. Stake is locked.
 4. Redis lock coordinates queue matching.
 5. Compatible waiting match activates.
-6. Backend derives per-player puzzle seeds.
+6. Backend derives one shared puzzle seed for the match and creates independent player board states.
 7. Backend owns current progress updates.
 8. Submission validates moves/clicks.
 9. Settlement unlocks/consumes stakes and credits reward.

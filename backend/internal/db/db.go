@@ -27,6 +27,7 @@ import (
 	"skill-arena/internal/game"
 	"skill-arena/internal/game/puzzle"
 	mazegame "skill-arena/internal/games/maze"
+	gamesregistry "skill-arena/internal/games/registry"
 	"skill-arena/internal/id"
 	"skill-arena/internal/matchmaking"
 	"skill-arena/internal/models"
@@ -67,6 +68,7 @@ type Store struct {
 	backups              []*models.BackupRecord
 	cache                *cache.Cache
 	arenaRegistry        *arenaregistry.Registry
+	gamesRegistry        *gamesregistry.Registry
 	settings             *config.RuntimeSettings
 	pvpMatches           map[string]*models.PvPMatch
 	pvpSubmissions       map[string][]*models.PvPSubmission
@@ -108,10 +110,11 @@ type Store struct {
 }
 
 type Options struct {
-	DatabaseURL string
-	Environment string
-	RedisURL    string
-	Storage     config.StorageSettings
+	DatabaseURL   string
+	Environment   string
+	RedisURL      string
+	Storage       config.StorageSettings
+	GamesRegistry *gamesregistry.Registry
 }
 
 type storeSnapshot struct {
@@ -225,6 +228,19 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 		}
 	}
 
+	gameModules := opts.GamesRegistry
+	if gameModules == nil {
+		var err error
+		gameModules, err = gamesregistry.NewProduction()
+		if err != nil {
+			return nil, fmt.Errorf("initialize games registry: %w", err)
+		}
+	}
+	arenaModules, err := gameModules.ArenaRegistry()
+	if err != nil {
+		return nil, fmt.Errorf("initialize Arena Core compatibility registry: %w", err)
+	}
+
 	store := &Store{
 		users:                map[string]*models.User{},
 		wallets:              map[string]*models.Wallet{},
@@ -253,7 +269,8 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 		workerHealth:         map[string]*models.WorkerHealth{},
 		backups:              []*models.BackupRecord{},
 		cache:                cache.New(),
-		arenaRegistry:        arenaregistry.New(mazegame.New()),
+		arenaRegistry:        arenaModules,
+		gamesRegistry:        gameModules,
 		settings:             config.Runtime(),
 		pvpMatches:           map[string]*models.PvPMatch{},
 		pvpSubmissions:       map[string][]*models.PvPSubmission{},
@@ -392,7 +409,16 @@ func (s *Store) puzzleServiceLocked() *puzzle.Service {
 
 func (s *Store) arenaModuleForSessionLocked(session *models.GameSession) (core.GameModule, error) {
 	if s.arenaRegistry == nil {
-		s.arenaRegistry = arenaregistry.New(mazegame.New())
+		gameModules, err := gamesregistry.NewProduction()
+		if err != nil {
+			return nil, err
+		}
+		arenaModules, err := gameModules.ArenaRegistry()
+		if err != nil {
+			return nil, err
+		}
+		s.gamesRegistry = gameModules
+		s.arenaRegistry = arenaModules
 	}
 	gameID := session.Mode
 	if gameID == "" || gameID == "maze" || gameID == "game" || gameID == "calibration" {

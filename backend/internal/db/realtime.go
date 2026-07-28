@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"skill-arena/internal/arena/registry"
+	gamesregistry "skill-arena/internal/games/registry"
 	"skill-arena/internal/id"
 	"skill-arena/internal/models"
 	"skill-arena/migrations"
@@ -26,6 +27,10 @@ func (s *Store) initPostgresRealtime(ctx context.Context) error {
 
 func (s *Store) ArenaRegistry() *registry.Registry {
 	return s.arenaRegistry
+}
+
+func (s *Store) GamesRegistry() *gamesregistry.Registry {
+	return s.gamesRegistry
 }
 
 func (s *Store) CreateRealtimeMatch(ctx context.Context, match models.RealtimeMatch, participant models.RealtimeParticipant) (*models.RealtimeMatch, error) {
