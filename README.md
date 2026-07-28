@@ -3644,7 +3644,7 @@ Approved phase scope
   -> Format and build
   -> Focused tests
   -> Applicable Sprint 1-5 regressions
-  -> Documentation reconciliation
+  -> Material documentation reconciliation
   -> Validation report
   -> Review
   -> Explicit approval
@@ -3909,7 +3909,7 @@ Every implementation phase ends with a short, permanent validation record in thi
 | Performance impact | Before/after measurements or `not applicable` with evidence |
 | Security impact | Authority, authentication, authorization, secrets, rate limit, integrity, dependency, and threat review |
 | Frozen sprint impact | Files touched, contracts reviewed, regressions run, and Architecture Protection Rule result |
-| Documentation | README sections reconciled with implementation |
+| Documentation | Material documentation updated, or explicit confirmation that no architecture, public contract, operational behavior, or developer workflow changed |
 | Remaining work | Work explicitly deferred to later approved phases |
 | Risks discovered | Severity, impact, owner, mitigation, and decision |
 | Recommendation | `APPROVE IMPLEMENTATION PHASE N` or `DO NOT APPROVE IMPLEMENTATION PHASE N` |
@@ -3921,6 +3921,7 @@ Report rules:
 - A remaining item that belongs to the current phase prevents approval.
 - Future-phase work is listed but not implemented.
 - Any unexpected frozen-sprint change automatically requires Architecture Protection Rule evidence.
+- The validation report remains mandatory even when no other project documentation requires an update.
 - The next implementation phase remains **NOT STARTED** until explicit approval is given.
 - A phase approval is not a Sprint 6 freeze and does not create a freeze tag.
 
@@ -3933,7 +3934,7 @@ Functional:
 - The approved phase scope is fully implemented.
 - Every acceptance criterion is met.
 - No future-phase feature or placeholder implementation is included.
-- The README matches the implementation.
+- The implementation does not contradict the canonical product and architecture contracts.
 
 Build:
 
@@ -3949,6 +3950,13 @@ Testing:
 - Existing applicable regression tests pass.
 - Tests are added for every new behavior, error, boundary, and security control.
 - Race, fuzz, property, browser, or end-to-end suites run when required by the phase contract.
+
+Regression:
+
+- All previously frozen Sprint 1 through Sprint 5 regression suites pass.
+- No public API or event contract changes unless the change was explicitly documented and approved before implementation.
+- No architectural boundary is violated. Maze logic may not enter Realtime Arena, Arena Hub, Identity, Financial Platform, Admin CRM, or another frozen platform domain.
+- Any permitted generic frozen-sprint extension satisfies and records every Architecture Protection Rule condition.
 
 Performance:
 
@@ -3975,6 +3983,9 @@ Documentation and evidence:
 - Performance evidence includes measurements or a justified `not applicable`.
 - Security evidence identifies the controls reviewed.
 - Known limitations, deferred later-phase work, and discovered risks are explicit.
+- Project documentation is updated whenever the phase changes architecture, public contracts, operational behavior, or developer workflows.
+- Purely internal refactoring or test additions do not require unrelated product-document rewrites.
+- When no material documentation update is required, the validation report says so and explains why.
 
 Freeze decision:
 
