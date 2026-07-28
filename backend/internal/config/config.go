@@ -183,13 +183,14 @@ type PlatformSettings struct {
 }
 
 type SecuritySettings struct {
-	PuzzleSecret      string
-	CookieSecure      bool
-	CookieDomain      string
-	AccessCookieName  string
-	RefreshCookieName string
-	AccessTTL         time.Duration
-	RefreshTTL        time.Duration
+	PuzzleSecret        string
+	PuzzleEncryptionKey string
+	CookieSecure        bool
+	CookieDomain        string
+	AccessCookieName    string
+	RefreshCookieName   string
+	AccessTTL           time.Duration
+	RefreshTTL          time.Duration
 }
 
 type EmailSettings struct {
@@ -385,13 +386,14 @@ func LoadRuntimeSettings() *RuntimeSettings {
 			SupportEmail: envString("SKILL_ARENA_SUPPORT_EMAIL", "support@skillarena.local"),
 		},
 		Security: SecuritySettings{
-			PuzzleSecret:      envString("SKILL_ARENA_PUZZLE_SECRET", envString("SKILL_ARENA_JWT_SECRET", "local-development-puzzle-secret")),
-			CookieSecure:      envBool("SKILL_ARENA_COOKIE_SECURE", false),
-			CookieDomain:      envString("SKILL_ARENA_COOKIE_DOMAIN", ""),
-			AccessCookieName:  envString("SKILL_ARENA_ACCESS_COOKIE", "sa_access"),
-			RefreshCookieName: envString("SKILL_ARENA_REFRESH_COOKIE", "sa_refresh"),
-			AccessTTL:         time.Duration(envInt("SKILL_ARENA_ACCESS_TTL_MINUTES", 15)) * time.Minute,
-			RefreshTTL:        time.Duration(envInt("SKILL_ARENA_REFRESH_TTL_DAYS", 30)) * 24 * time.Hour,
+			PuzzleSecret:        envString("SKILL_ARENA_PUZZLE_SECRET", envString("SKILL_ARENA_JWT_SECRET", "local-development-puzzle-secret-derivation-key")),
+			PuzzleEncryptionKey: envString("SKILL_ARENA_PUZZLE_ENCRYPTION_KEY", "local-development-puzzle-encryption-key-material"),
+			CookieSecure:        envBool("SKILL_ARENA_COOKIE_SECURE", false),
+			CookieDomain:        envString("SKILL_ARENA_COOKIE_DOMAIN", ""),
+			AccessCookieName:    envString("SKILL_ARENA_ACCESS_COOKIE", "sa_access"),
+			RefreshCookieName:   envString("SKILL_ARENA_REFRESH_COOKIE", "sa_refresh"),
+			AccessTTL:           time.Duration(envInt("SKILL_ARENA_ACCESS_TTL_MINUTES", 15)) * time.Minute,
+			RefreshTTL:          time.Duration(envInt("SKILL_ARENA_REFRESH_TTL_DAYS", 30)) * 24 * time.Hour,
 		},
 		Email: EmailSettings{
 			BaseURL:    envString("SKILL_ARENA_PUBLIC_BASE_URL", "http://localhost:3000"),
@@ -435,6 +437,16 @@ func LoadRuntimeSettings() *RuntimeSettings {
 func validateProduction(cfg *Config) error {
 	if len(cfg.JWTSecret) < 32 || strings.Contains(strings.ToLower(cfg.JWTSecret), "development") || cfg.JWTSecret == "test-secret" {
 		return errors.New("production SKILL_ARENA_JWT_SECRET must be at least 32 characters and must not be a development secret")
+	}
+	if len(cfg.Settings.Security.PuzzleSecret) < 32 || len(cfg.Settings.Security.PuzzleEncryptionKey) < 32 {
+		return errors.New("production puzzle derivation and encryption keys must each contain at least 32 characters")
+	}
+	if cfg.Settings.Security.PuzzleSecret == cfg.Settings.Security.PuzzleEncryptionKey {
+		return errors.New("production puzzle derivation and encryption keys must be distinct")
+	}
+	if strings.Contains(strings.ToLower(cfg.Settings.Security.PuzzleSecret), "development") ||
+		strings.Contains(strings.ToLower(cfg.Settings.Security.PuzzleEncryptionKey), "development") {
+		return errors.New("production puzzle keys must not be development secrets")
 	}
 	if len(cfg.Settings.MFA.EncryptionKey) < 32 {
 		return errors.New("production SKILL_ARENA_MFA_ENCRYPTION_KEY must be at least 32 characters")

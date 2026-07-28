@@ -57,6 +57,8 @@ func TestProductionConfigurationAcceptsExternalServiceURLs(t *testing.T) {
 	t.Setenv("SKILL_ARENA_REDIS_URL", "redis://localhost:6379")
 	t.Setenv("SKILL_ARENA_JWT_SECRET", "production-test-jwt-secret-at-least-32-characters")
 	t.Setenv("SKILL_ARENA_MFA_ENCRYPTION_KEY", "production-test-mfa-key-at-least-32-characters")
+	t.Setenv("SKILL_ARENA_PUZZLE_SECRET", "production-test-puzzle-derivation-key-at-least-32-characters")
+	t.Setenv("SKILL_ARENA_PUZZLE_ENCRYPTION_KEY", "production-test-puzzle-encryption-key-at-least-32-characters")
 	t.Setenv("SKILL_ARENA_COOKIE_SECURE", "true")
 	t.Setenv("SKILL_ARENA_PUBLIC_BASE_URL", "https://arena.example.com")
 	t.Setenv("SKILL_ARENA_ADMIN_BASE_URL", "https://operations.example.com")

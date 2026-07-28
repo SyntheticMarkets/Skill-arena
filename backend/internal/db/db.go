@@ -27,12 +27,15 @@ import (
 	"skill-arena/internal/game"
 	"skill-arena/internal/game/puzzle"
 	mazegame "skill-arena/internal/games/maze"
+	mazegenerator "skill-arena/internal/games/maze/generator"
 	gamesregistry "skill-arena/internal/games/registry"
 	"skill-arena/internal/id"
 	"skill-arena/internal/matchmaking"
 	"skill-arena/internal/models"
+	gamespostgres "skill-arena/internal/persistence/postgres/games"
 	saredis "skill-arena/internal/redis"
 	"skill-arena/internal/storage"
+	"skill-arena/migrations"
 
 	_ "github.com/lib/pq"
 )
@@ -73,6 +76,7 @@ type Store struct {
 	pvpMatches           map[string]*models.PvPMatch
 	pvpSubmissions       map[string][]*models.PvPSubmission
 	puzzleRepo           *puzzle.MemoryRepository
+	gamesPuzzleService   *mazegenerator.Service
 	payments             map[string]*models.PaymentProviderSession
 	withdrawals          map[string]*models.WithdrawalRequest
 	amlReviews           map[string]*models.AMLReview
@@ -110,11 +114,12 @@ type Store struct {
 }
 
 type Options struct {
-	DatabaseURL   string
-	Environment   string
-	RedisURL      string
-	Storage       config.StorageSettings
-	GamesRegistry *gamesregistry.Registry
+	DatabaseURL      string
+	Environment      string
+	RedisURL         string
+	Storage          config.StorageSettings
+	GamesRegistry    *gamesregistry.Registry
+	PuzzleRepository mazegenerator.Repository
 }
 
 type storeSnapshot struct {
@@ -364,6 +369,37 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 		}
 	}
 
+	puzzleRepository := opts.PuzzleRepository
+	if puzzleRepository == nil {
+		if store.pg != nil {
+			var err error
+			puzzleRepository, err = gamespostgres.NewPuzzleRepository(store.pg)
+			if err != nil {
+				_ = store.pg.Close()
+				return nil, fmt.Errorf("initialize games Puzzle Service repository: %w", err)
+			}
+		} else {
+			puzzleRepository = mazegenerator.NewMemoryRepository()
+		}
+	}
+	vault, err := mazegenerator.NewSeedVault(
+		store.settings.Security.PuzzleSecret,
+		store.settings.Security.PuzzleEncryptionKey,
+	)
+	if err != nil {
+		if store.pg != nil {
+			_ = store.pg.Close()
+		}
+		return nil, fmt.Errorf("initialize games Puzzle Service seed vault: %w", err)
+	}
+	store.gamesPuzzleService, err = mazegenerator.NewService(puzzleRepository, vault)
+	if err != nil {
+		if store.pg != nil {
+			_ = store.pg.Close()
+		}
+		return nil, fmt.Errorf("initialize games Puzzle Service: %w", err)
+	}
+
 	return store, nil
 }
 
@@ -405,6 +441,12 @@ func (s *Store) puzzleServiceLocked() *puzzle.Service {
 		s.puzzleRepo = puzzle.NewMemoryRepository()
 	}
 	return puzzle.NewService(settings.Security.PuzzleSecret, s.puzzleRepo)
+}
+
+// GamesPuzzleService exposes the Sprint 6 internal orchestration boundary.
+// It is not an HTTP or realtime gameplay contract.
+func (s *Store) GamesPuzzleService() *mazegenerator.Service {
+	return s.gamesPuzzleService
 }
 
 func (s *Store) arenaModuleForSessionLocked(session *models.GameSession) (core.GameModule, error) {
@@ -847,7 +889,14 @@ CREATE INDEX IF NOT EXISTS idx_financial_idempotency_user_operation ON financial
 	if err := s.initPostgresAdminCRM(ctx); err != nil {
 		return err
 	}
-	return s.initPostgresRealtime(ctx)
+	if err := s.initPostgresRealtime(ctx); err != nil {
+		return err
+	}
+	return s.initPostgresGames(ctx)
+}
+
+func (s *Store) initPostgresGames(ctx context.Context) error {
+	return s.applyFinancialMigration(ctx, "008_games_puzzle_service", migrations.GamesPuzzleService)
 }
 
 func (s *Store) loadPostgresSnapshot(ctx context.Context) (bool, error) {

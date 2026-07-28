@@ -21,3 +21,8 @@ var AdminCRM string
 //
 //go:embed 007_realtime_arena.sql
 var RealtimeArena string
+
+// GamesPuzzleService is the additive Sprint 6 Phase 2 puzzle metadata schema.
+//
+//go:embed 008_games_puzzle_service.sql
+var GamesPuzzleService string
