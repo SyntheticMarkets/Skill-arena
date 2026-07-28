@@ -59,7 +59,7 @@ Do not create frontend placeholders that depend on unfinished backend work. Do n
 
 ### Release 1.0 Architecture
 
-Status: **Sprints 1-5 complete and frozen. Sprint 6 has not begun.**
+Status: **Sprints 1-5 complete and frozen. Sprint 6 Implementation Phases 1 and 2 are complete and validated; Phase 3 has not started.**
 
 Release 1.0 is organized as independently owned product domains. A frozen domain may receive bug fixes, security fixes, performance work, scalability work, or integration support, but its business contract may not be silently redesigned by a later sprint.
 
@@ -80,7 +80,7 @@ Skill Arena Release 1.0
 +-- Sprint 5: Realtime Arena                  [COMPLETE - FROZEN]
 |   `-- tag: sprint-5-v1.0-freeze
 |
-+-- Sprint 6: Maze Arena                      [PLANNED]
++-- Sprint 6: Maze Arena                      [IN PROGRESS - PHASES 1-2 COMPLETE]
 |
 +-- Sprint 7: Competition Platform            [PLANNED]
 |   `-- Seasons, tournaments, leaderboards, and rewards
@@ -3386,7 +3386,7 @@ Sprint 6 governance status:
 | Design | Complete |
 | Implementation Blueprint | Complete |
 | Governance | Complete |
-| Implementation | Phase 1 validation decision: approved; Phase 2 awaits explicit product-owner authorization |
+| Implementation | Phases 1 and 2 complete and validated; Phase 3 not started |
 
 ##### Blueprint Authority
 
@@ -4333,7 +4333,7 @@ Rollback:
 
 ###### Remaining Work
 
-Implementation Phase 2 remains **NOT STARTED** and owns:
+At the Phase 1 validation point, Implementation Phase 2 was **NOT STARTED** and owned:
 
 - Puzzle Service.
 - Generator Version persistence.
@@ -4341,7 +4341,7 @@ Implementation Phase 2 remains **NOT STARTED** and owns:
 - Puzzle metadata persistence.
 - PostgreSQL puzzle repositories and migrations.
 
-Implementation Phases 3 through 9 remain **NOT STARTED**.
+At the Phase 1 validation point, Implementation Phases 3 through 9 were also **NOT STARTED**.
 
 ###### Known Limitations And Risks
 
@@ -4357,7 +4357,391 @@ No limitation above represents incomplete Implementation Phase 1 scope.
 
 **APPROVED**
 
-Implementation Phase 2 remains **NOT STARTED** until the product owner explicitly authorizes it.
+The product owner subsequently authorized Implementation Phase 2; its validation report follows.
+
+##### Implementation Phase 2 Validation Report
+
+Phase: **Implementation Phase 2 - Puzzle Service**
+
+Scope: Puzzle Service orchestration, generator lifecycle boundary, complete generator-version identity, cryptographically secure seed lifecycle, deterministic random stream, Difficulty Profile and puzzle metadata, repository ports, normalized PostgreSQL persistence, atomic uniqueness, assignment, tests, and production configuration.
+
+Implementation date: **2026-07-28**
+
+Validation date: **2026-07-28**
+
+Implementation commit: `ac267e0d189a3911cc854a4301c1380dfab3243e`
+
+Freeze tag: none. A phase approval is not a Sprint 6 freeze.
+
+###### Summary
+
+Implementation Phase 2 establishes the production Puzzle Service foundation without implementing a puzzle-generation algorithm or Maze gameplay.
+
+Delivered:
+
+- Maze-owned Puzzle Service behind repository ports.
+- Exact immutable generator identity covering generator, seed format, random stream, patterns, geometry, scoring, policy, solver, validator, analyzer, difficulty schema, and canonical encoding versions.
+- Generator-version lifecycle: `qualification`, `active`, `replay_only`, `retired`, and `revoked`.
+- Integer/fixed-point Difficulty Profile metadata without floating-point authority.
+- 256-bit cryptographic entropy and domain-separated HMAC-SHA-256 seed derivation.
+- AES-256-GCM seed encryption at rest with authenticated metadata.
+- Separate derivation and encryption keys with production startup validation.
+- Non-secret seed hashes and opaque seed references for uniqueness and audit.
+- Versioned HMAC-SHA-256 counter stream with rejection sampling and a fixed test vector.
+- Idempotent puzzle preparation through a hashed request key.
+- CPU processor boundary that runs outside repository transactions.
+- Atomic analysis, uniqueness claim, assignment, and puzzle finalization.
+- Concurrent retry handling that returns the original committed assignment.
+- PostgreSQL production adapter and memory-only local/test adapter.
+- Additive migration `008_games_puzzle_service.sql`.
+- Dependency injection through `db.Options` and production store composition.
+
+Not delivered because it belongs to later phases:
+
+- Pattern selection or geometry generation.
+- Dependency graph construction.
+- Solver, deadlock detection, or solution uniqueness.
+- Measured difficulty calculation or calibration.
+- Replay generation, reconstruction, or verification.
+- Maze action validation, scoring, or completion.
+- Realtime gameplay dispatch, PvP synchronization, or client rendering.
+
+###### Files Changed
+
+Configuration and composition:
+
+- `backend/internal/config/config.go`.
+- `backend/internal/config/config_test.go`.
+- `backend/internal/db/db.go`.
+- `docker-compose.yml`.
+
+Puzzle Service:
+
+- `backend/internal/games/maze/generator/hash.go`.
+- `backend/internal/games/maze/generator/memory_repository.go`.
+- `backend/internal/games/maze/generator/pipeline.go`.
+- `backend/internal/games/maze/generator/repository.go`.
+- `backend/internal/games/maze/generator/seed.go`.
+- `backend/internal/games/maze/generator/service.go`.
+- `backend/internal/games/maze/generator/stream.go`.
+- `backend/internal/games/maze/generator/types.go`.
+
+PostgreSQL:
+
+- `backend/internal/persistence/postgres/games/puzzle_repository.go`.
+- `backend/migrations/008_games_puzzle_service.sql`.
+- `backend/migrations/embed.go`.
+
+Tests:
+
+- `backend/internal/games/maze/generator/service_test.go`.
+- `backend/internal/db/games_puzzle_postgres_integration_test.go`.
+
+Canonical documentation:
+
+- `README.md`.
+
+###### Public Contracts
+
+Public REST APIs: **unchanged**.
+
+Realtime WebSocket protocol: **unchanged**.
+
+Player Platform and Admin CRM contracts: **unchanged**.
+
+Frozen Sprint 1 through Sprint 5 business behavior: **unchanged**.
+
+Additive internal contracts:
+
+- `generator.Repository`.
+- `generator.Service`.
+- `generator.Processor`.
+- `generator.VersionKey` and `generator.GeneratorVersion`.
+- `generator.DifficultyProfile` and `generator.DifficultyAnalysis`.
+- `generator.PuzzleMetadata`, `generator.Finalization`, and `generator.Assignment`.
+- `generator.SeedVault`, `generator.SeedScope`, and `generator.RandomStream`.
+- `db.Options.PuzzleRepository`.
+- `Store.GamesPuzzleService()`.
+
+No route, event, or client payload exposes seed ciphertext, nonce, or plaintext seed material.
+
+###### Database
+
+Migration:
+
+```text
+008_games_puzzle_service
+```
+
+Tables:
+
+- `game_generator_versions`.
+- `game_difficulty_profiles`.
+- `game_puzzles`.
+- `game_difficulty_analyses`.
+- `game_puzzle_uniqueness_claims`.
+- `game_puzzle_assignments`.
+
+Controls:
+
+- Positive immutable version components.
+- Bounded lifecycle and reuse-policy values.
+- Canonical SHA-256 digest constraints.
+- No plaintext seed column.
+- Encrypted seed ciphertext and nonce requirements.
+- Unique request and seed references.
+- Restrictive foreign keys.
+- One accepted analysis per puzzle/analyzer version.
+- Partial unique indexes for one-use seed and puzzle hashes.
+- One assignment per scope.
+- Transactional migration checksum validation.
+- Serializable finalization transaction.
+
+PostgreSQL is selected whenever the store uses a PostgreSQL URL. The memory repository is used only when PostgreSQL is disabled for local development or injected by tests.
+
+###### Tests Added
+
+Coverage includes:
+
+- Version and Difficulty Profile validation.
+- Secure seed creation, encryption, recovery, and authenticated-data binding.
+- Ciphertext tampering rejection.
+- Scope/domain separation.
+- No secret fields in JSON metadata.
+- Exact deterministic random-stream vector.
+- Random-stream chunk independence and domain separation.
+- Concurrent one-use puzzle-hash claims with one winner.
+- Rollback with no partial metadata.
+- Cancellation and replay-only version rejection.
+- Preparation idempotency.
+- Sequential and concurrent work idempotency.
+- Processor execution outside repository transactions.
+- PostgreSQL migration, persistence, sealed-seed handling, atomic claims, and rollback record counts.
+
+###### Backend Verification
+
+Environment:
+
+```text
+go version go1.26.5 windows/amd64
+PostgreSQL 17.10 isolated validation cluster
+```
+
+Formatting, static analysis, build, and modules:
+
+```text
+gofmt -w <changed Go files>
+go vet ./...
+go build ./...
+go mod verify
+```
+
+Result:
+
+- All changed Go files are formatted.
+- `go vet`: exit code `0`.
+- `go build`: exit code `0`.
+- Module verification: `all modules verified`.
+
+Full backend regression:
+
+```text
+go test ./... -count=1
+```
+
+Result:
+
+- Exit code `0`.
+- All backend packages compiled.
+- `internal/db` passed in `142.428s`.
+- `internal/realtime` passed in `16.363s`.
+- New Puzzle Service tests passed.
+
+PostgreSQL integration:
+
+Each integration suite ran against a freshly recreated isolated PostgreSQL 17 database:
+
+```text
+TestPostgresAuthenticationRepository                         PASS
+TestPostgresArenaHubRepository                               PASS
+TestPostgresFinancialRepository                              PASS
+TestPostgresAdminCRMRepository                               PASS
+TestPostgresRealtimeRepository                               PASS
+TestPostgresGamesPuzzleServicePersistenceAndAtomicClaims     PASS
+```
+
+The new Puzzle Service PostgreSQL test passed in `0.60s` without race instrumentation and `5.669s` with race instrumentation.
+
+Race verification:
+
+```text
+CGO_ENABLED=1 go test -race ./internal/games/maze/generator -count=5
+CGO_ENABLED=1 go test -race ./internal/db -run '^TestPostgresGamesPuzzleServicePersistenceAndAtomicClaims$'
+```
+
+Result: passed with no race report.
+
+An attempted package-wide `go test -race ./internal/db` exceeded Go's `10m` test timeout while the legacy `TestConcurrentLaunchLoadPaths` was still executing hundreds of CPU-heavy prototype puzzle generations. It produced no race report before timeout. The same test passes in the normal full regression. Phase 2 changed neither that legacy generator nor the load test.
+
+Coverage:
+
+```text
+go test ./internal/games/maze/generator -cover -count=1
+```
+
+Result: `71.1%` statement coverage.
+
+###### Frontend And Frozen-Sprint Regression Verification
+
+Player Platform:
+
+```text
+npm test
+npm run lint
+npm run typecheck
+npm run build
+npm run test:e2e
+npm audit --audit-level=high --omit=dev
+```
+
+Result:
+
+- Vitest: 5 files and 9 tests passed.
+- ESLint passed with zero warnings.
+- TypeScript passed.
+- Next.js `16.2.11` production build compiled 23 routes.
+- Playwright: 21 tests passed across desktop, tablet, and mobile in `3.9m`.
+- Production dependency audit found 0 vulnerabilities.
+
+Admin CRM:
+
+```text
+npm test
+npm run lint
+npm run typecheck
+npm run build
+npm run test:e2e
+npm audit --audit-level=high --omit=dev
+```
+
+Result:
+
+- Vitest: 2 files and 5 tests passed.
+- ESLint passed with zero warnings.
+- TypeScript passed.
+- Next.js `16.2.11` production build compiled 13 routes.
+- Playwright: 3 tests passed across desktop, tablet, and mobile in `1.0m`.
+- Production dependency audit found 0 vulnerabilities.
+
+No Player Platform or Admin CRM source file changed in Phase 2.
+
+###### Performance Evidence
+
+Command:
+
+```text
+go test ./internal/games/maze/generator -run '^$' -bench BenchmarkServicePrepare -benchmem -count=5
+```
+
+Environment:
+
+- Windows AMD64.
+- Intel Core i7-8665U at 1.90 GHz.
+- In-memory repository, isolating service and cryptographic overhead.
+
+Results:
+
+```text
+19751 ns/op   8147 B/op   239 allocs/op
+20182 ns/op   8213 B/op   239 allocs/op
+20046 ns/op   8214 B/op   239 allocs/op
+21076 ns/op   8181 B/op   239 allocs/op
+19956 ns/op   8213 B/op   239 allocs/op
+```
+
+Puzzle preparation averages approximately `20 us` before PostgreSQL/network latency. Production generation and solver latency remain Phase 3 and Phase 4 acceptance work because no algorithm exists in Phase 2.
+
+###### Security Evidence
+
+Verified:
+
+- Seed entropy comes from `crypto/rand`.
+- Seed derivation is HMAC-SHA-256 with length-prefixed domain and scope fields.
+- Practice/House/Training seeds require participant scope.
+- PvP and tournament seeds can remain match-scoped and shared.
+- Seeds are encrypted with AES-256-GCM before persistence.
+- Encryption authenticated data binds puzzle, game, mode, profile, and exact generator version.
+- Derivation and encryption keys must be separate and at least 32 characters in production.
+- Development-key markers fail production startup validation.
+- Seed ciphertext and nonce are excluded from JSON.
+- Seed material is never formatted into errors or logs.
+- Deterministic streams are versioned and domain-separated.
+- Bounded integer selection uses rejection sampling.
+- Exact versions never fall back to latest.
+- Replay-only, retired, or revoked versions cannot create a new puzzle.
+- Idempotency keys are hashed before persistence.
+- One-use seed and puzzle hashes are enforced by PostgreSQL unique indexes.
+- Finalization uses a serializable short transaction.
+- Processor CPU work occurs before the finalization transaction.
+- No client-authoritative gameplay, route, renderer, solver, wallet, or reward behavior was introduced.
+- New source contains no TODO, placeholder, fake provider, sample implementation, `math/rand`, or hardcoded production secret.
+
+###### Architecture Protection Rule
+
+Frozen implementation files changed:
+
+- `backend/internal/config/config.go`.
+- `backend/internal/config/config_test.go`.
+- `backend/internal/db/db.go`.
+- `backend/migrations/embed.go`.
+- `docker-compose.yml`.
+
+Rule evidence:
+
+1. Platform-generic: secure puzzle keys, repository injection, migration startup, and service composition support every future deterministic game.
+2. Future-game benefit: the store depends on a repository port and does not contain Maze generation or action rules.
+3. Backward compatibility: existing Store, REST, Realtime, player, and admin contracts remain unchanged.
+4. Public contracts unchanged: no HTTP route, WebSocket event, authentication, financial, CRM, or frontend contract changed.
+5. Regression tests: full Go, all isolated PostgreSQL repositories, Player Platform, Admin CRM, and browser suites pass.
+6. Rationale documented: production requires normalized PostgreSQL metadata and distinct encryption material; local development retains the injected memory adapter.
+
+No frozen Sprint 1 through Sprint 5 business rule was changed.
+
+Rollback:
+
+- Revert implementation commit `ac267e0d189a3911cc854a4301c1380dfab3243e`.
+- Migration `008` is additive. Production rollback leaves its unreferenced tables in place unless an approved database rollback procedure removes them.
+- No existing table, row, API, event, or client contract requires data transformation.
+
+###### Known Limitations And Risks
+
+- The Phase 2 `Processor` is a production orchestration contract; no generator, solver, validator, analyzer, or gameplay implementation exists yet.
+- Historical seed decryption requires retention of the configured encryption key. Key rotation and key-ring/secret-manager resolution must be completed before a key is rotated; no production key has been rotated in this phase.
+- All PostgreSQL integration tests pass on fresh isolated databases. Running every PostgreSQL integration test against one shared database exposes an existing harness collision because each frozen test migrates the same local legacy snapshot before its own cleanup.
+- The Admin CRM PostgreSQL audit-chain test failed once because of existing timestamp normalization behavior and passed on immediate isolated retry. No Admin CRM code changed.
+- Package-wide database race instrumentation exceeds the existing ten-minute test timeout in the legacy high-complexity puzzle load test. Targeted Phase 2 race tests pass.
+- Production pattern generation, solver latency, difficulty calibration, and replay determinism remain explicitly deferred to their approved phases.
+
+No limitation above represents missing Implementation Phase 2 scope.
+
+###### Remaining Work
+
+Implementation Phase 3 remains **NOT STARTED** and owns:
+
+- Versioned pattern selection.
+- Deterministic geometry and physical dependency generation.
+- Bounded candidate generation and deterministic ranking.
+- Production validation pipeline orchestration.
+- Measured difficulty feature calculation.
+- Canonical generation, puzzle, validation, solution, and analysis hash inputs.
+
+Implementation Phases 4 through 9 remain **NOT STARTED**.
+
+###### Phase Decision
+
+**APPROVED**
+
+Implementation Phase 3 must not begin until the product owner explicitly approves this validation report.
 
 ##### Public REST API Contracts
 
@@ -5506,7 +5890,9 @@ Phase 4 is **APPROVED**.
 
 Sprint 6 Implementation Phase 1 validation decision is **APPROVED**.
 
-Implementation Phase 2 remains **NOT STARTED** until explicitly authorized. Implementation Phases 3 through 9 remain **NOT STARTED**.
+Sprint 6 Implementation Phase 2 validation decision is **APPROVED**.
+
+Implementation Phases 3 through 9 remain **NOT STARTED** and require explicit product-owner authorization.
 
 ### Sprint 7: Tournaments, Leaderboards, Seasons, And Rewards
 
@@ -10587,6 +10973,7 @@ Required production environment:
 - `SKILL_ARENA_REDIS_URL=redis://...`
 - `SKILL_ARENA_JWT_SECRET`
 - `SKILL_ARENA_PUZZLE_SECRET`
+- `SKILL_ARENA_PUZZLE_ENCRYPTION_KEY`
 - `SKILL_ARENA_MFA_ENCRYPTION_KEY`
 - `SKILL_ARENA_ALLOWED_ORIGINS`
 - `SKILL_ARENA_COOKIE_SECURE=true`
