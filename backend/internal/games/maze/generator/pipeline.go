@@ -15,6 +15,7 @@ type Processor interface {
 
 type ProcessingInput struct {
 	Metadata PuzzleMetadata
+	Profile  DifficultyProfile
 	Seed     SeedMaterial `json:"-"`
 }
 
@@ -59,7 +60,13 @@ func (s *Service) Execute(ctx context.Context, request WorkRequest, processor Pr
 		return Assignment{}, lookupErr
 	}
 
-	result, err := processor.Process(ctx, ProcessingInput{Metadata: prepared.Metadata, Seed: prepared.Seed})
+	profile, err := s.repository.GetDifficultyProfile(ctx, prepared.Metadata.DifficultyID)
+	if err != nil {
+		return Assignment{}, err
+	}
+	result, err := processor.Process(ctx, ProcessingInput{
+		Metadata: prepared.Metadata, Profile: profile, Seed: prepared.Seed,
+	})
 	if err != nil {
 		return Assignment{}, err
 	}
