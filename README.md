@@ -59,7 +59,7 @@ Do not create frontend placeholders that depend on unfinished backend work. Do n
 
 ### Release 1.0 Architecture
 
-Status: **Sprints 1-5 complete and frozen. Sprint 6 Implementation Phases 1 through 4 are complete and validated; Phase 5 has not started.**
+Status: **Sprints 1-5 complete and frozen. Sprint 6 Implementation Phases 1 through 7 are complete and validated; Phase 8 has not started.**
 
 Release 1.0 is organized as independently owned product domains. A frozen domain may receive bug fixes, security fixes, performance work, scalability work, or integration support, but its business contract may not be silently redesigned by a later sprint.
 
@@ -80,7 +80,7 @@ Skill Arena Release 1.0
 +-- Sprint 5: Realtime Arena                  [COMPLETE - FROZEN]
 |   `-- tag: sprint-5-v1.0-freeze
 |
-+-- Sprint 6: Maze Arena                      [IN PROGRESS - PHASES 1-4 COMPLETE]
++-- Sprint 6: Maze Arena                      [IN PROGRESS - PHASES 1-7 COMPLETE]
 |
 +-- Sprint 7: Competition Platform            [PLANNED]
 |   `-- Seasons, tournaments, leaderboards, and rewards
@@ -95,7 +95,7 @@ Skill Arena Release 1.0
 | 3 | Financial Platform | Wallet, ledger, deposits, withdrawals, limits, assessments, responsible gaming, Payment Core, and Treasury contracts | Frozen |
 | 4 | Admin CRM | Separate staff identity, permissions, operations, compliance, finance, support, audit, and monitoring application | Complete - frozen at `sprint-4-v1.0-freeze` |
 | 5 | Realtime Arena | Authenticated gateway, presence, live events, reconnect, ordering, and distributed coordination | Complete - frozen at `sprint-5-v1.0-freeze` |
-| 6 | Maze Arena | Deterministic puzzle pipeline, authoritative gameplay, PvP, replay, and game-specific presentation | Planned |
+| 6 | Maze Arena | Deterministic puzzle pipeline, authoritative gameplay, PvP, replay, and game-specific presentation | In progress - Phases 1-7 complete |
 | 7 | Competition Platform | Tournament, season, leaderboard, reward, spectator, dispute, and competition settlement lifecycles | Planned |
 | 8 | Production Launch | Provider certification, jurisdiction approval, deployment, disaster recovery, load, chaos, security, and launch-candidate verification | Planned |
 
@@ -6053,6 +6053,311 @@ scope.
 Implementation Phase 7 must not begin until the product owner explicitly
 reviews and approves this validation report.
 
+##### Implementation Phase 7 Validation Report
+
+Phase: **Implementation Phase 7 - Realtime Integration**
+
+Decision: **APPROVED**
+
+Implementation commit: `e3c06de` - `Integrate Maze with Realtime Arena`
+
+Phase 8 status: **NOT STARTED**
+
+###### Summary
+
+Implementation Phase 7 connects the Phase 6 Maze Engine to the frozen Realtime
+Arena through the generic Games Registry and game runtime contracts. Realtime
+Arena remains responsible for authenticated transport, matchmaking, presence,
+connection lifecycle, event ordering, reconnection, distributed coordination,
+and generic replay scheduling. Maze remains responsible for puzzle preparation,
+action validation, state transitions, completion, winner determination,
+renderer-safe projections, and Maze replay events.
+
+The integration adds no frontend gameplay, tournament orchestration, season
+behavior, wallet behavior, rewards, or economy changes.
+
+###### Delivered Behavior
+
+- Realtime Arena resolves versioned games through the Games Registry. It does
+  not import Maze or branch on Maze identifiers.
+- Practice creates a fresh, server-generated puzzle assignment for every
+  player session.
+- PvP prepares one shared immutable puzzle for the match and creates an
+  independent authoritative participant state for each player.
+- Client messages contain game intent only. Maze direction, collision,
+  progress, completion, timing, and winner decisions remain server-owned.
+- Every participant action requires an action identifier, exact next client
+  sequence, expected state version, action kind, and game-owned payload.
+- Accepted and blocked actions are committed atomically with their immutable
+  receipt and hash-chained Realtime events.
+- Concurrent identical retries return the original receipt. Twenty-four
+  simultaneous copies of one action produce one state transition and one
+  `game.action.processed` event.
+- A repeated action identifier or participant sequence with different content
+  fails closed as a duplicate mismatch.
+- Authoritative sync returns the participant's current renderer snapshot,
+  state version, last client sequence, and last server event sequence.
+- Existing disconnect, heartbeat, reconnect, presence, ready, leave, and
+  session-resume behavior is reused without Maze-specific networking.
+- Leaving an active match records a server-owned forfeit transition before the
+  generic Realtime match lifecycle is updated.
+- Server maintenance applies Maze deadlines through the optional generic
+  deadline runtime contract.
+- Completion transitions the generic match lifecycle and schedules replay
+  finalization through the existing worker infrastructure.
+- Replay finalization reconstructs Maze replay version `2` from committed
+  events, verifies it, signs it with the rotating Realtime integrity service,
+  and saves it through the object-storage abstraction.
+- Live execution and stored replay verification produce matching authoritative
+  state checksums and action metrics.
+
+###### Generic Session And Event Contracts
+
+The authenticated gateway adds the following backward-compatible client
+messages:
+
+```json
+{
+  "type": "game.action",
+  "matchId": "match_01...",
+  "actionId": "action_01...",
+  "kind": "maze.arrow.click",
+  "payload": { "arrowId": "a0007" },
+  "clientSequence": 4,
+  "expectedStateVersion": 3,
+  "latencyMs": 18
+}
+```
+
+```json
+{
+  "type": "game.sync.request",
+  "matchId": "match_01..."
+}
+```
+
+The gateway returns `game.action.receipt` and `game.state.sync`. The existing
+`state.sync` response remains compatible and may now include an additive
+`game` field when the registered module implements the generic runtime.
+
+Stable game gateway error codes are:
+
+- `GAME_SEQUENCE_GAP`
+- `GAME_STATE_CONFLICT`
+- `GAME_DUPLICATE_MISMATCH`
+- `GAME_ACTION_REJECTED`
+- `GAME_SYNC_REJECTED`
+
+Committed generic events include `game.puzzle.ready`,
+`game.action.processed`, game-owned transition events, and
+`game.replay.ready`. Generic envelopes carry opaque game payloads; Realtime
+Arena does not interpret Maze action fields.
+
+###### Persistence And Transaction Boundaries
+
+Migration `009_games_runtime.sql` adds:
+
+- `game_participant_states` for one versioned authoritative state per match and
+  participant.
+- `game_action_receipts` for immutable, idempotent action outcomes.
+- Foreign keys to match, participant, and user authorities.
+- Uniqueness on participant client sequence and action identity.
+- State, event-range, status, and monotonic-version checks.
+- Match/status, user/update, puzzle, event-range, sequence, and processing-time
+  indexes.
+
+`CommitGameAction` performs compare-and-swap state validation, event append,
+state update, and receipt insertion in one PostgreSQL transaction. The memory
+development adapter mirrors the same semantics under its store lock.
+
+Puzzle generation, solver qualification, validation, difficulty analysis, and
+replay reconstruction execute outside the store transaction and distributed
+action lock. Only authoritative state and metadata commits occupy the critical
+section.
+
+###### Files Changed
+
+Runtime persistence:
+
+- `backend/internal/models/game_runtime.go`
+- `backend/internal/db/game_runtime.go`
+- `backend/internal/db/game_runtime_postgres_integration_test.go`
+- `backend/internal/db/db.go`
+- `backend/migrations/009_games_runtime.sql`
+- `backend/migrations/embed.go`
+
+Games Platform and Maze runtime:
+
+- `backend/internal/games/interfaces/module.go`
+- `backend/internal/games/interfaces/replay.go`
+- `backend/internal/games/registry/bootstrap.go`
+- `backend/internal/games/registry/legacy.go`
+- `backend/internal/games/session/service.go`
+- `backend/internal/games/maze/runtime.go`
+- `backend/internal/games/maze/module.json`
+- `backend/internal/games/maze/replay/object_repository.go`
+
+Realtime integration:
+
+- `backend/internal/realtime/service.go`
+- `backend/internal/realtime/gateway.go`
+- `backend/internal/realtime/maze_integration_test.go`
+- `backend/internal/workers/manager.go`
+
+###### Public Contracts And Frozen Sprint Impact
+
+- Public REST API changes: **none**.
+- Existing WebSocket messages and responses: **unchanged**.
+- Additive generic WebSocket messages: `game.action` and
+  `game.sync.request`.
+- Additive generic WebSocket responses: `game.action.receipt` and
+  `game.state.sync`.
+- Database migration: additive migration `009_games_runtime.sql`.
+- Sprint 1 through Sprint 4 business behavior changes: **none**.
+- Sprint 5 files receive only the previously approved generic integration
+  extension.
+
+The Sprint 5 extension satisfies every Architecture Protection Rule condition:
+
+1. It is platform-generic and contains no Maze import or Maze identifier.
+2. Every future authoritative game can use the same action, sync, deadline,
+   replay, and lifecycle contracts.
+3. Existing queue, ready, subscribe, reconnect, heartbeat, leave, event, and
+   replay behavior remains backward compatible.
+4. Existing public contracts remain valid; new message types and fields are
+   additive.
+5. Frozen Sprint 1 through Sprint 5 backend and E2E regression suites pass.
+6. The rationale, contracts, persistence, tests, and limitations are recorded
+   in this report.
+
+###### Backend Validation
+
+Commands:
+
+```text
+go test ./... -count=1
+go vet ./...
+go build ./...
+go mod verify
+```
+
+Result:
+
+- Full backend test suite passed.
+- Vet passed with no findings.
+- All backend packages built successfully.
+- Go module verification returned `all modules verified`.
+- Final focused Games Platform, Realtime, and worker regression passed.
+- The 24-request concurrent idempotency test passed in five consecutive runs.
+- Combined generic session and Realtime statement coverage: `69.2%`.
+
+Phase 7 tests prove:
+
+- full practice lifecycle, blocked behavior, completion, replay persistence,
+  and live/replay parity;
+- shared-puzzle PvP with independent participant state;
+- disconnect, reconnect, authoritative sync, and forfeit recovery;
+- eight concurrent practice assignments with no intentional puzzle reuse;
+- authenticated WebSocket action dispatch and state sync;
+- server maintenance deadline enforcement;
+- one transition and one event under 24 concurrent identical action retries;
+- PostgreSQL compare-and-swap behavior with one successful concurrent commit
+  when `SKILL_ARENA_TEST_POSTGRES_URL` is supplied.
+
+Native `-race` instrumentation could not run in the final shell because
+`CGO_ENABLED=0` and no C compiler is installed. Phase 7 concurrency behavior is
+covered by deterministic high-contention tests; native race instrumentation
+remains required on the Release 1.0 CI/reference environment.
+
+###### Frontend Regression Gate
+
+Player Platform:
+
+- ESLint passed with zero warnings.
+- TypeScript passed.
+- Vitest: 5 files and 9 tests passed.
+- Next.js `16.2.11` production build completed.
+- Playwright: 21 tests passed across desktop, tablet, and mobile in `3.8m`.
+- Dependency audit found 0 vulnerabilities.
+
+Admin CRM:
+
+- ESLint passed with zero warnings.
+- TypeScript passed.
+- Vitest: 2 files and 5 tests passed.
+- Next.js `16.2.11` production build completed.
+- Playwright: 3 tests passed across desktop, tablet, and mobile in `1.0m`.
+- Dependency audit found 0 vulnerabilities.
+
+Playwright proof images regenerated by the regression suites were restored to
+their committed versions after validation.
+
+###### Performance Evidence
+
+Windows AMD64 development machine, Intel Core i7-8665U:
+
+```text
+BenchmarkMazeRealtimeIdempotentAction-8
+200 iterations    208490 ns/op    67673 B/op    446 allocs/op
+
+BenchmarkMazeRealtimeStateSync-8
+200 iterations    181496 ns/op    56227 B/op    398 allocs/op
+```
+
+Observed idempotent receipt recovery was approximately `0.208 ms`; authoritative
+state sync was approximately `0.181 ms`. Both are below the approved Realtime
+action and reconnect processing targets before network latency. Production
+PostgreSQL, Redis, TLS, and object-storage P50/P95/P99 measurements remain Phase
+9 hardening evidence.
+
+###### Security And Boundary Evidence
+
+- The authenticated gateway derives player identity from the server session;
+  action payloads cannot choose another participant.
+- Match participation is verified before action, sync, reconnect, leave, or
+  replay behavior is exposed.
+- Client sequence, state version, action identity, request hash, state checksum,
+  and event hash chain prevent stale, reordered, forged, or ambiguous commits.
+- Match-scoped distributed locking and PostgreSQL compare-and-swap prevent
+  concurrent double application.
+- Lock contention is bounded. In-flight identical retries recover the committed
+  immutable receipt rather than creating another transition.
+- Renderer projections remain participant and role scoped.
+- Replay artifacts are reconstructed from committed actions, integrity checked,
+  signed, verified before persistence, and stored behind the production object
+  storage interface.
+- Realtime and worker production packages contain no Maze import, Maze action
+  parsing, Maze collision rule, or Maze winner logic.
+- No client-authoritative score, winner, reward, wallet, tournament, or season
+  state was introduced.
+- No TODO, FIXME, placeholder, dummy production service, `math/rand`, hardcoded
+  production secret, or mock production path was found in the Phase 7 source.
+
+###### Known Limitations And Remaining Work
+
+- Phase 8 is not started. It owns Maze rendering, movement animation, blocked
+  impact and return animation, audio, effects, mobile interaction,
+  accessibility, match presentation, and replay-viewer UX.
+- Phase 9 owns production-like PostgreSQL/Redis/S3/TLS load, soak, native race,
+  failover, restart, and infrastructure-failure validation.
+- The PostgreSQL integration suite is configuration-gated and was not executed
+  against a live PostgreSQL instance in this local validation environment.
+- Match-level action serialization is deliberately conservative. Maximum-profile
+  PvP throughput and lock-sharding decisions require Phase 9 production-like
+  load evidence rather than speculative complexity.
+- Tournament orchestration, season systems, economy, rewards, wallet changes,
+  and final progression rules remain out of Phase 7.
+
+No limitation above represents missing authorized Implementation Phase 7
+scope.
+
+###### Phase Decision
+
+**APPROVED**
+
+Implementation Phase 8 must not begin until the product owner explicitly
+reviews and approves this validation report.
+
 ##### Public REST API Contracts
 
 All routes are additive under `/api/v1`. They use the frozen browser session/cookie, CSRF, CORS, authorization, rate-limit, request-ID, and stable error-envelope controls. Maze does not introduce separate authentication.
@@ -7202,7 +7507,17 @@ Sprint 6 Implementation Phase 1 validation decision is **APPROVED**.
 
 Sprint 6 Implementation Phase 2 validation decision is **APPROVED**.
 
-Implementation Phases 3 through 9 remain **NOT STARTED** and require explicit product-owner authorization.
+Sprint 6 Implementation Phase 3 validation decision is **APPROVED**.
+
+Sprint 6 Implementation Phase 4 validation decision is **APPROVED**.
+
+Sprint 6 Implementation Phase 5 validation decision is **APPROVED**.
+
+Sprint 6 Implementation Phase 6 validation decision is **APPROVED**.
+
+Sprint 6 Implementation Phase 7 validation decision is **APPROVED**.
+
+Implementation Phases 8 and 9 remain **NOT STARTED** and require explicit product-owner authorization.
 
 ### Sprint 7: Tournaments, Leaderboards, Seasons, And Rewards
 
