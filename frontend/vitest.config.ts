@@ -9,7 +9,16 @@ export default defineConfig({
     include: ['**/*.test.{ts,tsx}'],
     coverage: {
       reporter: ['text', 'json-summary'],
-      include: ['app/auth/**', 'app/dashboard/**', 'app/lib/**', 'app/auth-context.tsx', 'app/hub-context.tsx'],
+      include: [
+        'app/auth/**',
+        'app/dashboard/**',
+        'app/games/interfaces/**',
+        'app/games/maze/**',
+        'app/games/registry/**',
+        'app/lib/**',
+        'app/auth-context.tsx',
+        'app/hub-context.tsx',
+      ],
     },
   },
 })

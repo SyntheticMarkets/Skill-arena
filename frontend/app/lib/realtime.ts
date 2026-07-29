@@ -25,10 +25,62 @@ export type RealtimeEvent = {
 export type RealtimeMatch = {
   id: string
   gameId: string
+  gameVersion?: string
+  replayVersion?: string
   mode: string
   status: string
   stateVersion: number
   sequence: number
+}
+
+export type RendererSnapshot = {
+  rendererVersion: string
+  stateVersion: number
+  payload: unknown
+  checksum: string
+}
+
+export type GameSync = {
+  snapshot: RendererSnapshot
+  stateVersion: number
+  lastClientSequence: number
+  lastServerSequence: number
+}
+
+export type GamePresentationEvent = {
+  kind: string
+  payload: unknown
+}
+
+export type GameActionResult = {
+  receipt: {
+    actionId: string
+    matchId: string
+    userId: string
+    clientSequence: number
+    expectedStateVersion: number
+    actionKind: string
+    accepted: boolean
+    resultCode: string
+    stateVersionBefore: number
+    stateVersionAfter: number
+    firstEventSequence: number
+    lastEventSequence: number
+    receiptHash: string
+    transition: {
+      accepted: boolean
+      code: string
+      progress?: unknown
+      presentation?: unknown
+      events?: GamePresentationEvent[]
+      completion?: { status: string; reason?: string }
+    }
+  }
+  snapshot: RendererSnapshot
+  events?: RealtimeEvent[]
+  completion?: { status: string; reason?: string }
+  outcome?: { status: string; winnerIds?: string[]; loserIds?: string[]; reason?: string }
+  duplicate: boolean
 }
 
 export type QueueResult = {
@@ -44,11 +96,16 @@ type GatewayMessage = {
   match?: RealtimeMatch
   event?: RealtimeEvent
   events?: RealtimeEvent[]
+  game?: GameSync
+  result?: GameActionResult
 }
 
 type RealtimeClientOptions = {
   onEvent?: (event: RealtimeEvent) => void
-  onSync?: (match: RealtimeMatch, events: RealtimeEvent[]) => void
+  onSync?: (match: RealtimeMatch, events: RealtimeEvent[], game?: GameSync) => void
+  onMatch?: (match: RealtimeMatch) => void
+  onGameSync?: (game: GameSync) => void
+  onActionReceipt?: (result: GameActionResult) => void
   onStatus?: (status: 'connecting' | 'connected' | 'reconnecting' | 'closed') => void
   onError?: (code: string) => void
 }
@@ -85,7 +142,34 @@ export class RealtimeClient {
   }
 
   ready(matchId = this.matchId) {
+    this.matchId = matchId
     this.send({ type: 'ready', matchId })
+  }
+
+  submitGameAction(action: {
+    matchId?: string
+    actionId: string
+    kind: string
+    payload: unknown
+    clientSequence: number
+    expectedStateVersion: number
+    latencyMs?: number
+  }) {
+    const matchId = action.matchId ?? this.matchId
+    this.send({
+      type: 'game.action',
+      matchId,
+      actionId: action.actionId,
+      kind: action.kind,
+      payload: action.payload,
+      clientSequence: action.clientSequence,
+      expectedStateVersion: action.expectedStateVersion,
+      latencyMs: action.latencyMs ?? 0,
+    })
+  }
+
+  requestGameSync(matchId = this.matchId) {
+    this.send({ type: 'game.sync.request', matchId })
   }
 
   leave(matchId = this.matchId) {
@@ -141,7 +225,21 @@ export class RealtimeClient {
       const events = message.events ?? []
       this.advance(events)
       this.matchId = message.match.id
-      this.options.onSync?.(message.match, events)
+      this.options.onSync?.(message.match, events, message.game)
+      if (message.game) this.options.onGameSync?.(message.game)
+      return
+    }
+    if (message.type === 'match.status' && message.match) {
+      this.matchId = message.match.id
+      this.options.onMatch?.(message.match)
+      return
+    }
+    if (message.type === 'game.state.sync' && message.game) {
+      this.options.onGameSync?.(message.game)
+      return
+    }
+    if (message.type === 'game.action.receipt' && message.result) {
+      this.options.onActionReceipt?.(message.result)
       return
     }
     if (message.type === 'match.event' && message.event) {

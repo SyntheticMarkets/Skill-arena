@@ -18,6 +18,8 @@ export default defineConfig({
     { name: 'desktop-chromium', use: { ...devices['Desktop Chrome'] } },
     { name: 'tablet-chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1024, height: 1366 }, hasTouch: true } },
     { name: 'mobile-chromium', use: { ...devices['Pixel 7'] } },
+    { name: 'desktop-firefox', testMatch: /maze-arena\.spec\.ts/, use: { ...devices['Desktop Firefox'] } },
+    { name: 'desktop-webkit', testMatch: /maze-arena\.spec\.ts/, use: { ...devices['Desktop Safari'] } },
   ],
   webServer: [
     {

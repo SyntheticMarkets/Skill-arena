@@ -11,7 +11,6 @@ import (
 
 	"skill-arena/internal/config"
 	"skill-arena/internal/db"
-	gamesregistry "skill-arena/internal/games/registry"
 	"skill-arena/internal/payments"
 	"skill-arena/internal/server"
 	"skill-arena/internal/workers"
@@ -29,17 +28,11 @@ func main() {
 	if err := payments.CoreFromSettings(cfg.Settings.Payments).ValidateConfiguration(cfg.Environment); err != nil {
 		log.Fatalf("invalid payment provider configuration: %v", err)
 	}
-	gameModules, err := gamesregistry.NewProduction()
-	if err != nil {
-		log.Fatalf("invalid game module configuration: %v", err)
-	}
-
 	store, err := db.NewWithOptions(ctx, db.Options{
-		DatabaseURL:   cfg.DatabaseURL,
-		Environment:   cfg.Environment,
-		RedisURL:      cfg.RedisURL,
-		Storage:       cfg.Settings.Storage,
-		GamesRegistry: gameModules,
+		DatabaseURL: cfg.DatabaseURL,
+		Environment: cfg.Environment,
+		RedisURL:    cfg.RedisURL,
+		Storage:     cfg.Settings.Storage,
 	})
 	if err != nil {
 		log.Fatalf("failed to connect database: %v", err)

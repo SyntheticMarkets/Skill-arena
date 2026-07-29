@@ -53,4 +53,55 @@ describe('Realtime client', () => {
     expect(socket.sent.map((item) => JSON.parse(item).type)).toEqual(['reconnect', 'ready'])
     client.close()
   })
+
+  it('sends game intent and exposes only authoritative receipts and snapshots', () => {
+    const receipts: string[] = []
+    const snapshots: number[] = []
+    const client = new RealtimeClient({
+      onActionReceipt: (result) => receipts.push(result.receipt.actionId),
+      onGameSync: (game) => snapshots.push(game.stateVersion),
+    })
+    client.connect()
+    const socket = MockWebSocket.instances[0]
+    socket.open()
+    client.ready('match-1')
+    client.submitGameAction({
+      actionId: 'action-1',
+      kind: 'arrow.click',
+      payload: { arrowId: 'a0000' },
+      clientSequence: 1,
+      expectedStateVersion: 0,
+    })
+    const sent = JSON.parse(socket.sent[socket.sent.length - 1])
+    expect(sent).toEqual({
+      type: 'game.action',
+      matchId: 'match-1',
+      actionId: 'action-1',
+      kind: 'arrow.click',
+      payload: { arrowId: 'a0000' },
+      clientSequence: 1,
+      expectedStateVersion: 0,
+      latencyMs: 0,
+    })
+    expect(sent).not.toHaveProperty('accepted')
+    expect(sent).not.toHaveProperty('state')
+    expect(sent).not.toHaveProperty('progress')
+
+    socket.message({
+      type: 'game.state.sync',
+      game: {
+        stateVersion: 3,
+        lastClientSequence: 4,
+        lastServerSequence: 9,
+        snapshot: { rendererVersion: '1', stateVersion: 3, payload: {}, checksum: 'hash' },
+      },
+    })
+    socket.message({
+      type: 'game.action.receipt',
+      result: { receipt: { actionId: 'action-1' }, snapshot: {}, duplicate: false },
+    })
+    expect(snapshots).toEqual([3])
+    expect(receipts).toEqual(['action-1'])
+    client.close()
+  })
 })
