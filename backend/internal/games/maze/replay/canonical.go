@@ -29,7 +29,27 @@ func genesisHash(genesis Genesis) string {
 	return generator.HashBytes("skill-arena:maze-replay-genesis:v1", buffer.Bytes())
 }
 
-func stateChecksum(
+func eventHash(genesis Genesis, event Event) string {
+	buffer := &bytes.Buffer{}
+	writeString(buffer, genesis.GenesisHash)
+	writeUint64(buffer, event.Sequence)
+	writeString(buffer, event.ParticipantID)
+	writeInt64(buffer, event.OffsetMS)
+	writeString(buffer, event.Kind)
+	writeString(buffer, event.ArrowID)
+	writeString(buffer, event.Code)
+	writeUint64(buffer, event.StateVersion)
+	writeString(buffer, event.BlockerID)
+	writeInt64(buffer, int64(event.CollisionCell.Column))
+	writeInt64(buffer, int64(event.CollisionCell.Row))
+	writeUint64(buffer, uint64(event.CollisionDistance))
+	writeUint64(buffer, uint64(event.EscapeDistance))
+	writeString(buffer, event.StateChecksum)
+	writeString(buffer, event.PreviousHash)
+	return generator.HashBytes("skill-arena:maze-replay-event:v1", buffer.Bytes())
+}
+
+func legacyStateChecksum(
 	genesis Genesis,
 	participantID string,
 	stateVersion uint64,
@@ -57,26 +77,6 @@ func stateChecksum(
 	return generator.HashBytes("skill-arena:maze-replay-state:v1", buffer.Bytes())
 }
 
-func eventHash(genesis Genesis, event Event) string {
-	buffer := &bytes.Buffer{}
-	writeString(buffer, genesis.GenesisHash)
-	writeUint64(buffer, event.Sequence)
-	writeString(buffer, event.ParticipantID)
-	writeInt64(buffer, event.OffsetMS)
-	writeString(buffer, event.Kind)
-	writeString(buffer, event.ArrowID)
-	writeString(buffer, event.Code)
-	writeUint64(buffer, event.StateVersion)
-	writeString(buffer, event.BlockerID)
-	writeInt64(buffer, int64(event.CollisionCell.Column))
-	writeInt64(buffer, int64(event.CollisionCell.Row))
-	writeUint64(buffer, uint64(event.CollisionDistance))
-	writeUint64(buffer, uint64(event.EscapeDistance))
-	writeString(buffer, event.StateChecksum)
-	writeString(buffer, event.PreviousHash)
-	return generator.HashBytes("skill-arena:maze-replay-event:v1", buffer.Bytes())
-}
-
 func replayHash(artifact Artifact) string {
 	buffer := &bytes.Buffer{}
 	writeString(buffer, artifact.Genesis.GenesisHash)
@@ -94,6 +94,10 @@ func replayHash(artifact Artifact) string {
 		writeUint64(buffer, participant.StateVersion)
 		writeUint64(buffer, uint64(participant.SuccessfulActions))
 		writeUint64(buffer, uint64(participant.BlockedActions))
+		if artifact.Genesis.Versions.ReplayVersion >= ReplayVersionEngine {
+			writeUint64(buffer, uint64(participant.CurrentCombo))
+			writeUint64(buffer, uint64(participant.MaximumCombo))
+		}
 		writeBool(buffer, participant.Completed)
 		writeInt64(buffer, participant.CompletedAtMS)
 		writeString(buffer, participant.StateChecksum)

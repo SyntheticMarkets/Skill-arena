@@ -60,6 +60,10 @@ func (testIntegrity) VerifyReplayIntegrity(
 }
 
 func newFixture(t testing.TB) fixture {
+	return newFixtureWithReplayVersion(t, ReplayVersionLegacy)
+}
+
+func newFixtureWithReplayVersion(t testing.TB, replayVersion int) fixture {
 	t.Helper()
 	now := time.Date(2026, 7, 29, 10, 0, 0, 0, time.UTC)
 	repository := generator.NewMemoryRepository()
@@ -144,7 +148,7 @@ func newFixture(t testing.TB) fixture {
 		t.Fatal(err)
 	}
 	versions := Versions{
-		GameVersion: "1.0.0", ProtocolVersion: 1, ReplayVersion: 1,
+		GameVersion: "1.0.0", ProtocolVersion: 1, ReplayVersion: replayVersion,
 		RendererVersion: 1, StateSchemaVersion: 1, Generator: version.Key,
 	}
 	genesis, err := service.BuildGenesis(context.Background(), GenesisRequest{
@@ -190,6 +194,11 @@ func (f fixture) completedArtifact(t testing.TB) Artifact {
 func TestReplayReconstructionIsDeterministicAndTamperEvident(t *testing.T) {
 	fixture := newFixture(t)
 	artifact := fixture.completedArtifact(t)
+	if artifact.Genesis.Versions.ReplayVersion != ReplayVersionLegacy ||
+		artifact.Participants[0].CurrentCombo != 0 ||
+		artifact.Participants[0].MaximumCombo != 0 {
+		t.Fatal("legacy replay contract was silently reinterpreted")
+	}
 	for range 3 {
 		report, err := fixture.service.Verify(t.Context(), artifact)
 		if err != nil || !report.Verified || report.Status != StatusVerified {
@@ -290,6 +299,11 @@ func TestReplayRejectsVersionMismatchInvalidActionsAndUnknownJSON(t *testing.T) 
 	request.Versions.Generator.SolverVersion++
 	if _, err := fixture.service.BuildGenesis(t.Context(), request); err == nil {
 		t.Fatal("mismatched generator version was accepted")
+	}
+	request.Versions = fixture.genesis.Versions
+	request.Versions.ReplayVersion = 3
+	if _, err := fixture.service.BuildGenesis(t.Context(), request); err == nil {
+		t.Fatal("unsupported replay version was accepted")
 	}
 	if _, err := fixture.service.Seal(t.Context(), SealRequest{
 		Genesis: fixture.genesis, ParticipantIDs: []string{"player-1"},

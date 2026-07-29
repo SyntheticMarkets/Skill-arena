@@ -58,6 +58,7 @@ func validateArtifactEnvelope(artifact Artifact) error {
 	for index, participant := range artifact.Participants {
 		participantIDs[index] = participant.ParticipantID
 		if participant.CompletedAtMS < -1 || participant.CompletedAtMS > duration ||
+			participant.CurrentCombo < 0 || participant.MaximumCombo < participant.CurrentCombo ||
 			!generator.ValidHash(participant.StateChecksum) {
 			return errors.New("replay participant result is invalid")
 		}

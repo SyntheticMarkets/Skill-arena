@@ -1,21 +1,18 @@
 package solver
 
 import (
-	"fmt"
+	"errors"
 
+	"skill-arena/internal/games/maze/engine"
 	"skill-arena/internal/games/maze/generator"
 )
 
-type Collision struct {
-	Clear          bool
-	BlockerID      string
-	CollisionCell  generator.Cell
-	Distance       int
-	EscapeDistance int
-}
+type Collision = engine.Collision
 
 type occupancyIndex struct {
 	owners map[uint64]string
+	model  *engine.CollisionModel
+	err    error
 }
 
 func newOccupancyIndex(board generator.Board) occupancyIndex {
@@ -25,86 +22,36 @@ func newOccupancyIndex(board generator.Board) occupancyIndex {
 			owners[cellKey(cell)] = arrow.ID
 		}
 	}
-	return occupancyIndex{owners: owners}
+	model, err := engine.NewCollisionModel(board)
+	return occupancyIndex{owners: owners, model: model, err: err}
 }
 
 func (index occupancyIndex) collision(
-	board generator.Board,
+	_ generator.Board,
 	removed map[string]bool,
 	arrow generator.Arrow,
 ) (Collision, error) {
-	dx, dy, ok := directionVector(arrow.Direction)
-	if !ok {
-		return Collision{}, fmt.Errorf("arrow %q has invalid direction", arrow.ID)
+	if index.err != nil {
+		return Collision{}, index.err
 	}
-	head := arrow.Head()
-	for distance := 1; ; distance++ {
-		cell := generator.Cell{Column: head.Column + dx*distance, Row: head.Row + dy*distance}
-		if !inside(board, cell) {
-			return Collision{
-				Clear: true, Distance: distance,
-				EscapeDistance: completeEscapeDistance(board, arrow),
-			}, nil
-		}
-		owner, occupied := index.owners[cellKey(cell)]
-		if !occupied || owner == arrow.ID || removed[owner] {
-			continue
-		}
-		return Collision{
-			BlockerID: owner, CollisionCell: cell, Distance: distance,
-		}, nil
+	if index.model == nil {
+		return Collision{}, errors.New("collision authority is unavailable")
 	}
-}
-
-func completeEscapeDistance(board generator.Board, arrow generator.Arrow) int {
-	minColumn, maxColumn := arrow.Cells[0].Column, arrow.Cells[0].Column
-	minRow, maxRow := arrow.Cells[0].Row, arrow.Cells[0].Row
-	for _, cell := range arrow.Cells[1:] {
-		if cell.Column < minColumn {
-			minColumn = cell.Column
-		}
-		if cell.Column > maxColumn {
-			maxColumn = cell.Column
-		}
-		if cell.Row < minRow {
-			minRow = cell.Row
-		}
-		if cell.Row > maxRow {
-			maxRow = cell.Row
+	removedIDs := make([]string, 0, len(removed))
+	for id, isRemoved := range removed {
+		if isRemoved {
+			removedIDs = append(removedIDs, id)
 		}
 	}
-	switch arrow.Direction {
-	case generator.DirectionRight:
-		return board.Columns - minColumn
-	case generator.DirectionLeft:
-		return maxColumn + 1
-	case generator.DirectionUp:
-		return maxRow + 1
-	case generator.DirectionDown:
-		return board.Rows - minRow
-	default:
-		return 0
-	}
+	return index.model.Evaluate(removedIDs, arrow.ID)
 }
 
 func directionVector(direction generator.Direction) (int, int, bool) {
-	switch direction {
-	case generator.DirectionRight:
-		return 1, 0, true
-	case generator.DirectionUp:
-		return 0, -1, true
-	case generator.DirectionLeft:
-		return -1, 0, true
-	case generator.DirectionDown:
-		return 0, 1, true
-	default:
-		return 0, 0, false
-	}
+	return engine.DirectionVector(direction)
 }
 
 func inside(board generator.Board, cell generator.Cell) bool {
-	return cell.Column >= 0 && cell.Column < board.Columns &&
-		cell.Row >= 0 && cell.Row < board.Rows
+	return engine.Inside(board, cell)
 }
 
 func cellKey(cell generator.Cell) uint64 {

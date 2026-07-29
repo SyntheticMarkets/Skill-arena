@@ -10,6 +10,9 @@ import (
 )
 
 const (
+	ReplayVersionLegacy = 1
+	ReplayVersionEngine = 2
+
 	EventArrowAccepted = "arrow.accepted"
 	EventArrowBlocked  = "arrow.blocked"
 
@@ -28,7 +31,8 @@ type Versions struct {
 
 func (v Versions) Validate() error {
 	if strings.TrimSpace(v.GameVersion) == "" || v.ProtocolVersion <= 0 ||
-		v.ReplayVersion <= 0 || v.RendererVersion <= 0 || v.StateSchemaVersion <= 0 {
+		(v.ReplayVersion != ReplayVersionLegacy && v.ReplayVersion != ReplayVersionEngine) ||
+		v.RendererVersion <= 0 || v.StateSchemaVersion <= 0 {
 		return errors.New("replay version tuple is incomplete")
 	}
 	return v.Generator.Validate()
@@ -88,6 +92,8 @@ type ParticipantResult struct {
 	StateVersion      uint64 `json:"stateVersion"`
 	SuccessfulActions int    `json:"successfulActions"`
 	BlockedActions    int    `json:"blockedActions"`
+	CurrentCombo      int    `json:"currentCombo"`
+	MaximumCombo      int    `json:"maximumCombo"`
 	Completed         bool   `json:"completed"`
 	CompletedAtMS     int64  `json:"completedAtMs,omitempty"`
 	StateChecksum     string `json:"stateChecksum"`

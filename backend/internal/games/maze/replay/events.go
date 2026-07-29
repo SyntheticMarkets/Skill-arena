@@ -7,17 +7,20 @@ import (
 	"sort"
 	"strings"
 
+	"skill-arena/internal/games/maze/engine"
 	"skill-arena/internal/games/maze/generator"
 	"skill-arena/internal/games/maze/solver"
 )
 
 type participantState struct {
-	version     uint64
-	successful  int
-	blocked     int
-	complete    bool
-	completedAt int64
-	checksum    string
+	version      uint64
+	successful   int
+	blocked      int
+	currentCombo int
+	maximumCombo int
+	complete     bool
+	completedAt  int64
+	checksum     string
 }
 
 func (s *Service) reconstructEvents(
@@ -79,6 +82,8 @@ func (s *Service) reconstructEvents(
 		if step.Accepted {
 			state.version++
 			state.successful++
+			state.currentCombo++
+			state.maximumCombo = max(state.maximumCombo, state.currentCombo)
 		} else {
 			state.blocked++
 		}
@@ -86,9 +91,9 @@ func (s *Service) reconstructEvents(
 			state.complete = true
 			state.completedAt = draft.OffsetMS
 		}
-		state.checksum = stateChecksum(
+		state.checksum = replayStateChecksum(
 			genesis, draft.ParticipantID, state.version, draft.Sequence,
-			step.RemovedIDs, state.successful, state.blocked, state.complete,
+			step.RemovedIDs, state,
 		)
 		event := Event{
 			EventDraft: draft, StateVersion: state.version,
@@ -109,18 +114,42 @@ func (s *Service) reconstructEvents(
 	for _, participantID := range participants {
 		state := states[participantID]
 		if state.checksum == "" {
-			state.checksum = stateChecksum(
-				genesis, participantID, 0, 0, nil, 0, 0, false,
-			)
+			state.checksum = replayStateChecksum(genesis, participantID, 0, 0, nil, state)
 		}
-		results = append(results, ParticipantResult{
+		result := ParticipantResult{
 			ParticipantID: participantID, StateVersion: state.version,
 			SuccessfulActions: state.successful, BlockedActions: state.blocked,
 			Completed: state.complete, CompletedAtMS: state.completedAt,
 			StateChecksum: state.checksum,
-		})
+		}
+		if genesis.Versions.ReplayVersion >= ReplayVersionEngine {
+			result.CurrentCombo = state.currentCombo
+			result.MaximumCombo = state.maximumCombo
+		}
+		results = append(results, result)
 	}
 	return events, results, previousHash, nil
+}
+
+func replayStateChecksum(
+	genesis Genesis,
+	participantID string,
+	stateVersion uint64,
+	sequence uint64,
+	removedIDs []string,
+	state *participantState,
+) string {
+	if genesis.Versions.ReplayVersion == ReplayVersionLegacy {
+		return legacyStateChecksum(
+			genesis, participantID, stateVersion, sequence, removedIDs,
+			state.successful, state.blocked, state.complete,
+		)
+	}
+	return engine.ReplayStateChecksum(
+		genesis.PuzzleHash, participantID, genesis.Versions.StateSchemaVersion,
+		stateVersion, sequence, removedIDs, state.successful, state.blocked,
+		state.currentCombo, state.maximumCombo, state.complete,
+	)
 }
 
 func canonicalParticipants(participantIDs []string) ([]string, error) {
