@@ -38,15 +38,34 @@ const (
 )
 
 type IndependentVerifier interface {
-	Verify(context.Context, Board, DependencyGraph) (Verification, error)
+	Verify(context.Context, VerificationInput) (Verification, error)
+}
+
+type VerificationInput struct {
+	Board         Board
+	SolverVersion int
+	AllowIsolated bool
+}
+
+type VerificationMetrics struct {
+	ArrowCount        int
+	InitiallyOpen     int
+	DependencyEdges   int
+	DependencyDepth   int
+	Branching         int
+	CrossDependencies int
+	IsolatedArrows    int
 }
 
 type Verification struct {
 	Accepted       bool
+	SolverVersion  int
+	DependencyHash string
 	SolutionHash   string
 	MinimumActions int
 	Classification string
 	FinalChecksum  string
+	Metrics        VerificationMetrics
 }
 
 type CandidateObservation struct {
@@ -216,23 +235,33 @@ func (p *ProductionProcessor) qualifyCandidate(ctx context.Context, input Proces
 	if accepted, mismatch := CompareDifficulty(input.Profile, measured, candidate.Pattern); !accepted {
 		return QualifiedCandidate{Candidate: candidate, Measured: measured}, mismatch, nil
 	}
-	verification, err := p.verifier.Verify(ctx, candidate.Board.Clone(), candidate.Graph)
+	verification, err := p.verifier.Verify(ctx, VerificationInput{
+		Board: candidate.Board.Clone(), SolverVersion: input.Metadata.Version.SolverVersion,
+		AllowIsolated: allowIsolated,
+	})
 	if err != nil {
 		return QualifiedCandidate{Candidate: candidate, Measured: measured}, RejectionVerifierRejected, err
 	}
 	if !verification.Accepted {
 		return QualifiedCandidate{Candidate: candidate, Measured: measured}, RejectionVerifierRejected, nil
 	}
-	if !ValidHash(verification.SolutionHash) || !ValidHash(verification.FinalChecksum) ||
-		verification.MinimumActions != len(candidate.Board.Arrows) ||
-		(verification.Classification != "unique" && verification.Classification != "multiple") {
-		return QualifiedCandidate{Candidate: candidate, Measured: measured}, RejectionVerifierInvalid, nil
-	}
-	boardBytes, err := CanonicalBoard(candidate.Board)
+	graphBytes, err := CanonicalGraph(candidate.Graph)
 	if err != nil {
 		return QualifiedCandidate{Candidate: candidate, Measured: measured}, RejectionCanonicalEncoding, err
 	}
-	graphBytes, err := CanonicalGraph(candidate.Graph)
+	expectedDependencyHash := HashBytes(
+		"skill-arena:maze-dependency-graph:v1", graphBytes,
+		[]byte(intString(input.Metadata.Version.SolverVersion)),
+	)
+	if verification.SolverVersion != input.Metadata.Version.SolverVersion ||
+		verification.DependencyHash != expectedDependencyHash ||
+		!ValidHash(verification.SolutionHash) || !ValidHash(verification.FinalChecksum) ||
+		verification.MinimumActions != len(candidate.Board.Arrows) ||
+		(verification.Classification != "unique" && verification.Classification != "multiple") ||
+		!verificationMetricsMatch(verification.Metrics, measured) {
+		return QualifiedCandidate{Candidate: candidate, Measured: measured}, RejectionVerifierInvalid, nil
+	}
+	boardBytes, err := CanonicalBoard(candidate.Board)
 	if err != nil {
 		return QualifiedCandidate{Candidate: candidate, Measured: measured}, RejectionCanonicalEncoding, err
 	}
@@ -280,6 +309,16 @@ func (p *ProductionProcessor) qualifyCandidate(ctx context.Context, input Proces
 		Rank:   candidateRank(input.Profile, measured, candidate.Pattern, candidate.Index),
 		Result: result,
 	}, "", nil
+}
+
+func verificationMetricsMatch(metrics VerificationMetrics, measured MeasuredDifficulty) bool {
+	return metrics.ArrowCount == measured.ArrowCount &&
+		metrics.InitiallyOpen == measured.InitiallyOpen &&
+		metrics.DependencyEdges == measured.DependencyEdges &&
+		metrics.DependencyDepth == measured.DependencyDepth &&
+		metrics.Branching == measured.Branching &&
+		metrics.CrossDependencies == measured.CrossDependencies &&
+		metrics.IsolatedArrows == measured.IsolatedArrows
 }
 
 type GenerationError struct {

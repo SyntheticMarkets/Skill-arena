@@ -20,7 +20,7 @@ type testIndependentVerifier struct {
 
 type invalidIndependentVerifier struct{}
 
-func (invalidIndependentVerifier) Verify(context.Context, Board, DependencyGraph) (Verification, error) {
+func (invalidIndependentVerifier) Verify(context.Context, VerificationInput) (Verification, error) {
 	return Verification{Accepted: true, Classification: "unknown", MinimumActions: -1}, nil
 }
 
@@ -32,8 +32,13 @@ func (o *candidateObserver) ObserveCandidate(_ context.Context, observation Cand
 	o.observations = append(o.observations, observation)
 }
 
-func (v *testIndependentVerifier) Verify(ctx context.Context, board Board, graph DependencyGraph) (Verification, error) {
+func (v *testIndependentVerifier) Verify(ctx context.Context, input VerificationInput) (Verification, error) {
 	if err := ctx.Err(); err != nil {
+		return Verification{}, err
+	}
+	board := input.Board
+	graph, err := DeriveDependencies(board)
+	if err != nil {
 		return Verification{}, err
 	}
 	order, ok := testTopologicalOrder(board, graph)
@@ -41,6 +46,14 @@ func (v *testIndependentVerifier) Verify(ctx context.Context, board Board, graph
 		return Verification{Accepted: false}, nil
 	}
 	boardBytes, err := CanonicalBoard(board)
+	if err != nil {
+		return Verification{}, err
+	}
+	graphBytes, err := CanonicalGraph(graph)
+	if err != nil {
+		return Verification{}, err
+	}
+	measured, err := MeasureDifficulty(board, graph)
 	if err != nil {
 		return Verification{}, err
 	}
@@ -52,9 +65,20 @@ func (v *testIndependentVerifier) Verify(ctx context.Context, board Board, graph
 	v.calls++
 	v.mu.Unlock()
 	return Verification{
-		Accepted: true, Classification: "unique", MinimumActions: len(board.Arrows),
+		Accepted: true, SolverVersion: input.SolverVersion,
+		DependencyHash: HashBytes(
+			"skill-arena:maze-dependency-graph:v1", graphBytes,
+			[]byte(intString(input.SolverVersion)),
+		),
+		Classification: "unique", MinimumActions: len(board.Arrows),
 		SolutionHash:  HashBytes("test:solution:v1", orderBytes),
 		FinalChecksum: HashBytes("test:final:v1", boardBytes, orderBytes),
+		Metrics: VerificationMetrics{
+			ArrowCount: measured.ArrowCount, InitiallyOpen: measured.InitiallyOpen,
+			DependencyEdges: measured.DependencyEdges, DependencyDepth: measured.DependencyDepth,
+			Branching: measured.Branching, CrossDependencies: measured.CrossDependencies,
+			IsolatedArrows: measured.IsolatedArrows,
+		},
 	}, nil
 }
 
