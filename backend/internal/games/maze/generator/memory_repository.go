@@ -149,6 +149,20 @@ func (r *MemoryRepository) GetPuzzleByRequestHash(ctx context.Context, requestHa
 	return clonePuzzle(r.puzzles[id]), nil
 }
 
+func (r *MemoryRepository) GetDifficultyAnalysis(ctx context.Context, id string) (DifficultyAnalysis, error) {
+	if err := ctx.Err(); err != nil {
+		return DifficultyAnalysis{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	analysis, ok := r.analyses[id]
+	if !ok {
+		return DifficultyAnalysis{}, ErrNotFound
+	}
+	analysis.MeasuredFields = append([]byte(nil), analysis.MeasuredFields...)
+	return analysis, nil
+}
+
 func (r *MemoryRepository) FinalizeAndAssign(ctx context.Context, final Finalization) (Assignment, error) {
 	if err := ctx.Err(); err != nil {
 		return Assignment{}, err

@@ -32,6 +32,11 @@ type PreparedPuzzle struct {
 	Seed     SeedMaterial `json:"-"`
 }
 
+type ReconstructionInput struct {
+	ProcessingInput
+	Analysis DifficultyAnalysis
+}
+
 func NewService(repository Repository, vault *SeedVault) (*Service, error) {
 	if repository == nil || vault == nil {
 		return nil, errors.New("puzzle repository and seed vault are required")
@@ -133,6 +138,48 @@ func (s *Service) RevealSeed(ctx context.Context, puzzleID string) (SeedMaterial
 		return SeedMaterial{}, err
 	}
 	return s.revealMetadata(metadata)
+}
+
+func (s *Service) LoadReconstructionInput(ctx context.Context, puzzleID string) (ReconstructionInput, error) {
+	if err := ctx.Err(); err != nil {
+		return ReconstructionInput{}, err
+	}
+	metadata, err := s.repository.GetPuzzle(ctx, puzzleID)
+	if err != nil {
+		return ReconstructionInput{}, err
+	}
+	if metadata.Status != PuzzleAssigned && metadata.Status != PuzzleConsumed &&
+		metadata.Status != PuzzleRetired {
+		return ReconstructionInput{}, errors.New("puzzle is not available for reconstruction")
+	}
+	if !ValidHash(metadata.GenerationHash) || !ValidHash(metadata.PuzzleHash) ||
+		!ValidHash(metadata.ValidationHash) || !ValidHash(metadata.SolutionHash) ||
+		strings.TrimSpace(metadata.AnalysisID) == "" {
+		return ReconstructionInput{}, errors.New("puzzle reconstruction metadata is incomplete")
+	}
+	profile, err := s.repository.GetDifficultyProfile(ctx, metadata.DifficultyID)
+	if err != nil {
+		return ReconstructionInput{}, err
+	}
+	analysis, err := s.repository.GetDifficultyAnalysis(ctx, metadata.AnalysisID)
+	if err != nil {
+		return ReconstructionInput{}, err
+	}
+	if !analysis.Accepted || analysis.PuzzleID != metadata.ID ||
+		analysis.AnalyzerVersion != metadata.Version.AnalyzerVersion ||
+		!ValidHash(analysis.AnalysisHash) {
+		return ReconstructionInput{}, errors.New("accepted reconstruction analysis is invalid")
+	}
+	seed, err := s.revealMetadata(metadata)
+	if err != nil {
+		return ReconstructionInput{}, err
+	}
+	return ReconstructionInput{
+		ProcessingInput: ProcessingInput{
+			Metadata: publicPuzzleMetadata(metadata), Profile: profile, Seed: seed,
+		},
+		Analysis: analysis,
+	}, nil
 }
 
 func (s *Service) revealMetadata(metadata PuzzleMetadata) (SeedMaterial, error) {

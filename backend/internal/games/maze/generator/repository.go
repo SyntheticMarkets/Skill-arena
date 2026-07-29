@@ -10,6 +10,7 @@ type Repository interface {
 	CreatePuzzle(context.Context, PuzzleMetadata) error
 	GetPuzzle(context.Context, string) (PuzzleMetadata, error)
 	GetPuzzleByRequestHash(context.Context, string) (PuzzleMetadata, error)
+	GetDifficultyAnalysis(context.Context, string) (DifficultyAnalysis, error)
 	FinalizeAndAssign(context.Context, Finalization) (Assignment, error)
 	GetAssignment(context.Context, string, string) (Assignment, error)
 }

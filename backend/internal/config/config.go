@@ -183,14 +183,17 @@ type PlatformSettings struct {
 }
 
 type SecuritySettings struct {
-	PuzzleSecret        string
-	PuzzleEncryptionKey string
-	CookieSecure        bool
-	CookieDomain        string
-	AccessCookieName    string
-	RefreshCookieName   string
-	AccessTTL           time.Duration
-	RefreshTTL          time.Duration
+	PuzzleSecret           string
+	PuzzleEncryptionKey    string
+	ReplaySigningKey       string
+	ReplaySigningKeyID     string
+	ReplayVerificationKeys map[string]string
+	CookieSecure           bool
+	CookieDomain           string
+	AccessCookieName       string
+	RefreshCookieName      string
+	AccessTTL              time.Duration
+	RefreshTTL             time.Duration
 }
 
 type EmailSettings struct {
@@ -388,12 +391,17 @@ func LoadRuntimeSettings() *RuntimeSettings {
 		Security: SecuritySettings{
 			PuzzleSecret:        envString("SKILL_ARENA_PUZZLE_SECRET", envString("SKILL_ARENA_JWT_SECRET", "local-development-puzzle-secret-derivation-key")),
 			PuzzleEncryptionKey: envString("SKILL_ARENA_PUZZLE_ENCRYPTION_KEY", "local-development-puzzle-encryption-key-material"),
-			CookieSecure:        envBool("SKILL_ARENA_COOKIE_SECURE", false),
-			CookieDomain:        envString("SKILL_ARENA_COOKIE_DOMAIN", ""),
-			AccessCookieName:    envString("SKILL_ARENA_ACCESS_COOKIE", "sa_access"),
-			RefreshCookieName:   envString("SKILL_ARENA_REFRESH_COOKIE", "sa_refresh"),
-			AccessTTL:           time.Duration(envInt("SKILL_ARENA_ACCESS_TTL_MINUTES", 15)) * time.Minute,
-			RefreshTTL:          time.Duration(envInt("SKILL_ARENA_REFRESH_TTL_DAYS", 30)) * 24 * time.Hour,
+			ReplaySigningKey:    envString("SKILL_ARENA_REPLAY_SIGNING_KEY", "local-development-replay-signing-key-material"),
+			ReplaySigningKeyID:  envString("SKILL_ARENA_REPLAY_SIGNING_KEY_ID", "local-replay-v1"),
+			ReplayVerificationKeys: replayVerificationKeys(
+				envString("SKILL_ARENA_REPLAY_VERIFICATION_KEYS", "{}"),
+			),
+			CookieSecure:      envBool("SKILL_ARENA_COOKIE_SECURE", false),
+			CookieDomain:      envString("SKILL_ARENA_COOKIE_DOMAIN", ""),
+			AccessCookieName:  envString("SKILL_ARENA_ACCESS_COOKIE", "sa_access"),
+			RefreshCookieName: envString("SKILL_ARENA_REFRESH_COOKIE", "sa_refresh"),
+			AccessTTL:         time.Duration(envInt("SKILL_ARENA_ACCESS_TTL_MINUTES", 15)) * time.Minute,
+			RefreshTTL:        time.Duration(envInt("SKILL_ARENA_REFRESH_TTL_DAYS", 30)) * 24 * time.Hour,
 		},
 		Email: EmailSettings{
 			BaseURL:    envString("SKILL_ARENA_PUBLIC_BASE_URL", "http://localhost:3000"),
@@ -447,6 +455,21 @@ func validateProduction(cfg *Config) error {
 	if strings.Contains(strings.ToLower(cfg.Settings.Security.PuzzleSecret), "development") ||
 		strings.Contains(strings.ToLower(cfg.Settings.Security.PuzzleEncryptionKey), "development") {
 		return errors.New("production puzzle keys must not be development secrets")
+	}
+	if len(cfg.Settings.Security.ReplaySigningKey) < 32 ||
+		strings.Contains(strings.ToLower(cfg.Settings.Security.ReplaySigningKey), "development") ||
+		strings.TrimSpace(cfg.Settings.Security.ReplaySigningKeyID) == "" {
+		return errors.New("production replay signing key and key id are required")
+	}
+	if cfg.Settings.Security.ReplaySigningKey == cfg.Settings.Security.PuzzleSecret ||
+		cfg.Settings.Security.ReplaySigningKey == cfg.Settings.Security.PuzzleEncryptionKey {
+		return errors.New("production replay signing key must be distinct from puzzle keys")
+	}
+	for keyID, key := range cfg.Settings.Security.ReplayVerificationKeys {
+		if strings.TrimSpace(keyID) == "" || len(key) < 32 ||
+			strings.Contains(strings.ToLower(key), "development") {
+			return errors.New("production replay verification key ring is invalid")
+		}
 	}
 	if len(cfg.Settings.MFA.EncryptionKey) < 32 {
 		return errors.New("production SKILL_ARENA_MFA_ENCRYPTION_KEY must be at least 32 characters")
@@ -653,6 +676,14 @@ func Runtime() *RuntimeSettings {
 		runtimeSettings = LoadRuntimeSettings()
 	}
 	return runtimeSettings
+}
+
+func replayVerificationKeys(raw string) map[string]string {
+	keys := map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &keys); err != nil {
+		return map[string]string{"": ""}
+	}
+	return keys
 }
 
 func envString(key, fallback string) string {

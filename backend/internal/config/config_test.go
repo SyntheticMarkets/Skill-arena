@@ -9,6 +9,7 @@ func TestLoadRuntimeSettingsReadsEnvironmentOverrides(t *testing.T) {
 	t.Setenv("SKILL_ARENA_FEATURE_MEMORY_ARENA", "true")
 	t.Setenv("SKILL_ARENA_TRUST_PVP_MIN", "82")
 	t.Setenv("SKILL_ARENA_WITHDRAW_LIMIT_LIMITED", "123")
+	t.Setenv("SKILL_ARENA_REPLAY_VERIFICATION_KEYS", `{"retired-v1":"retired-replay-key-material-at-least-32-characters"}`)
 
 	settings := LoadRuntimeSettings()
 	if !settings.Features.MemoryArena {
@@ -19,6 +20,9 @@ func TestLoadRuntimeSettingsReadsEnvironmentOverrides(t *testing.T) {
 	}
 	if settings.Trust.WithdrawalLimits["limited"] != 123 {
 		t.Fatalf("limited withdrawal limit = %.0f, want 123", settings.Trust.WithdrawalLimits["limited"])
+	}
+	if settings.Security.ReplayVerificationKeys["retired-v1"] == "" {
+		t.Fatal("expected historical replay verification key")
 	}
 }
 
@@ -59,6 +63,8 @@ func TestProductionConfigurationAcceptsExternalServiceURLs(t *testing.T) {
 	t.Setenv("SKILL_ARENA_MFA_ENCRYPTION_KEY", "production-test-mfa-key-at-least-32-characters")
 	t.Setenv("SKILL_ARENA_PUZZLE_SECRET", "production-test-puzzle-derivation-key-at-least-32-characters")
 	t.Setenv("SKILL_ARENA_PUZZLE_ENCRYPTION_KEY", "production-test-puzzle-encryption-key-at-least-32-characters")
+	t.Setenv("SKILL_ARENA_REPLAY_SIGNING_KEY", "production-test-replay-signing-key-at-least-32-characters")
+	t.Setenv("SKILL_ARENA_REPLAY_SIGNING_KEY_ID", "production-replay-v1")
 	t.Setenv("SKILL_ARENA_COOKIE_SECURE", "true")
 	t.Setenv("SKILL_ARENA_PUBLIC_BASE_URL", "https://arena.example.com")
 	t.Setenv("SKILL_ARENA_ADMIN_BASE_URL", "https://operations.example.com")

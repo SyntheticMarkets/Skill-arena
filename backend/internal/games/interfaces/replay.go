@@ -1,6 +1,7 @@
 package interfaces
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 )
@@ -25,4 +26,23 @@ type ReplayEvent struct {
 	OccurredAt   time.Time       `json:"occurredAt"`
 	Kind         string          `json:"kind"`
 	Payload      json.RawMessage `json:"payload"`
+}
+
+type ReplayIntegrityRequest struct {
+	MatchID       string
+	GameID        string
+	ReplayHash    string
+	EventRootHash string
+	EventCount    int
+}
+
+type ReplayIntegrityProof struct {
+	Algorithm string `json:"algorithm"`
+	KeyID     string `json:"keyId"`
+	Signature string `json:"signature"`
+}
+
+type ReplayIntegrityService interface {
+	SignReplayIntegrity(context.Context, ReplayIntegrityRequest) (ReplayIntegrityProof, error)
+	VerifyReplayIntegrity(context.Context, ReplayIntegrityRequest, ReplayIntegrityProof) error
 }

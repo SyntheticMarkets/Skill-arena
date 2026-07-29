@@ -182,6 +182,21 @@ func (r *PuzzleRepository) GetPuzzleByRequestHash(ctx context.Context, requestHa
 	return r.GetPuzzle(ctx, id)
 }
 
+func (r *PuzzleRepository) GetDifficultyAnalysis(ctx context.Context, id string) (mazegenerator.DifficultyAnalysis, error) {
+	var analysis mazegenerator.DifficultyAnalysis
+	err := r.db.QueryRowContext(ctx, `
+SELECT analysis_id,puzzle_id,analyzer_version,accepted,classification,
+ measured_fields,analysis_hash,COALESCE(rejection_code,''),created_at
+FROM game_difficulty_analyses WHERE analysis_id=$1`, id).Scan(
+		&analysis.ID, &analysis.PuzzleID, &analysis.AnalyzerVersion,
+		&analysis.Accepted, &analysis.Classification, &analysis.MeasuredFields,
+		&analysis.AnalysisHash, &analysis.RejectionCode, &analysis.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return mazegenerator.DifficultyAnalysis{}, mazegenerator.ErrNotFound
+	}
+	return analysis, err
+}
+
 func (r *PuzzleRepository) FinalizeAndAssign(ctx context.Context, final mazegenerator.Finalization) (mazegenerator.Assignment, error) {
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
