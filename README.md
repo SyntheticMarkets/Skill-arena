@@ -59,7 +59,7 @@ Do not create frontend placeholders that depend on unfinished backend work. Do n
 
 ### Release 1.0 Architecture
 
-Status: **Sprints 1-5 complete and frozen. Sprint 6 Implementation Phases 1 through 7 are complete and validated; Phase 8 has not started.**
+Status: **Sprints 1-5 complete and frozen. Sprint 6 Implementation Phases 1 through 8 are complete and validated; Phase 9 has not started.**
 
 Release 1.0 is organized as independently owned product domains. A frozen domain may receive bug fixes, security fixes, performance work, scalability work, or integration support, but its business contract may not be silently redesigned by a later sprint.
 
@@ -80,7 +80,7 @@ Skill Arena Release 1.0
 +-- Sprint 5: Realtime Arena                  [COMPLETE - FROZEN]
 |   `-- tag: sprint-5-v1.0-freeze
 |
-+-- Sprint 6: Maze Arena                      [IN PROGRESS - PHASES 1-7 COMPLETE]
++-- Sprint 6: Maze Arena                      [IN PROGRESS - PHASES 1-8 COMPLETE]
 |
 +-- Sprint 7: Competition Platform            [PLANNED]
 |   `-- Seasons, tournaments, leaderboards, and rewards
@@ -95,7 +95,7 @@ Skill Arena Release 1.0
 | 3 | Financial Platform | Wallet, ledger, deposits, withdrawals, limits, assessments, responsible gaming, Payment Core, and Treasury contracts | Frozen |
 | 4 | Admin CRM | Separate staff identity, permissions, operations, compliance, finance, support, audit, and monitoring application | Complete - frozen at `sprint-4-v1.0-freeze` |
 | 5 | Realtime Arena | Authenticated gateway, presence, live events, reconnect, ordering, and distributed coordination | Complete - frozen at `sprint-5-v1.0-freeze` |
-| 6 | Maze Arena | Deterministic puzzle pipeline, authoritative gameplay, PvP, replay, and game-specific presentation | In progress - Phases 1-7 complete |
+| 6 | Maze Arena | Deterministic puzzle pipeline, authoritative gameplay, PvP, replay, and game-specific presentation | In progress - Phases 1-8 complete |
 | 7 | Competition Platform | Tournament, season, leaderboard, reward, spectator, dispute, and competition settlement lifecycles | Planned |
 | 8 | Production Launch | Provider certification, jurisdiction approval, deployment, disaster recovery, load, chaos, security, and launch-candidate verification | Planned |
 
@@ -6061,7 +6061,7 @@ Decision: **APPROVED**
 
 Implementation commit: `e3c06de` - `Integrate Maze with Realtime Arena`
 
-Phase 8 status: **NOT STARTED**
+Phase 8 status when this Phase 7 report was published: **NOT STARTED**
 
 ###### Summary
 
@@ -6335,7 +6335,8 @@ PostgreSQL, Redis, TLS, and object-storage P50/P95/P99 measurements remain Phase
 
 ###### Known Limitations And Remaining Work
 
-- Phase 8 is not started. It owns Maze rendering, movement animation, blocked
+- At Phase 7 validation time, Phase 8 had not started. It owns Maze rendering,
+  movement animation, blocked
   impact and return animation, audio, effects, mobile interaction,
   accessibility, match presentation, and replay-viewer UX.
 - Phase 9 owns production-like PostgreSQL/Redis/S3/TLS load, soak, native race,
@@ -6356,6 +6357,303 @@ scope.
 **APPROVED**
 
 Implementation Phase 8 must not begin until the product owner explicitly
+reviews and approves this validation report.
+
+##### Implementation Phase 8 Validation Report
+
+Phase: **Implementation Phase 8 - Frontend Presentation**
+
+Decision: **APPROVED**
+
+Implementation commit: `0549052` - `Implement Sprint 6 Maze presentation layer`
+
+Phase 9 status: **NOT STARTED**
+
+###### Summary
+
+Implementation Phase 8 delivers the player-facing Maze presentation as the
+first renderer registered through the game-neutral frontend catalog. The
+browser renders only server-owned projections, submits generic action intent,
+and applies authoritative action receipts after their presentation animation.
+It does not generate puzzles, calculate collisions, accept moves, calculate
+progress, determine completion, score matches, or select winners.
+
+The implementation includes Practice and PvP entry, authoritative live state,
+reconnect and restore behavior, accepted and blocked movement presentation,
+camera controls, sound cues, reduced motion, accessible keyboard controls,
+completion presentation, and a verified replay viewer driven by committed
+server events.
+
+No tournament, season, economy, wallet, matchmaking, or Admin CRM behavior was
+added.
+
+###### Delivered Behavior
+
+- `/games` is a game-neutral catalog driven by renderer registrations and
+  capability metadata. It no longer contains a local Maze simulation.
+- `/games/maze` hosts the registered Maze renderer and exposes Practice and
+  PvP entry without implementing queue or match rules in the page.
+- `/games/maze/replay/[matchId]` restores an authorized match and presents its
+  verified replay.
+- The generic Realtime client supports additive renderer snapshots, game sync,
+  match status, and action receipts without importing Maze types.
+- The Maze protocol parser validates renderer version, state version, board
+  dimensions, cells, directions, progress, status, timing, presentation
+  distances, and receipt consistency before rendering.
+- Unsupported versions, malformed geometry, invalid progress, inconsistent
+  receipts, and invalid replay events fail closed and request authoritative
+  recovery.
+- The browser submits only action identifier, match identifier, action kind,
+  arrow identifier, next client sequence, expected state version, and observed
+  latency.
+- Accepted arrows accelerate and glide along the server-provided direction and
+  escape distance. Removal occurs only after the exit presentation completes.
+- Blocked arrows use the server-provided collision and approach data to show
+  impact, a short response, and return to origin.
+- The board renders from immutable integer cell geometry with stable responsive
+  bounds, pan, zoom, and fit controls.
+- Sound cues use browser audio and remain opt-in. Reduced motion honors both the
+  operating-system preference and an explicit persistent player setting.
+- Keyboard controls expose every active arrow as a named button. Focus,
+  disabled, live-region, loading, reconnect, error, completion, and replay
+  states are represented without relying on color alone.
+- The HUD shows only server-owned time, progress, remaining arrows, combo, and
+  connection state.
+- Replay playback starts from the authoritative initial projection and advances
+  only through committed `game.action.processed` events. It does not run the
+  solver or recalculate action validity in the browser.
+- Replay metadata must report verified status before playback is exposed.
+- Completion explains the result, exposes actual successful and blocked action
+  counts, and offers a fresh Practice puzzle or verified replay.
+
+###### Defects Found And Corrected
+
+The independent browser validation found two integration defects:
+
+1. The API boot path created a descriptor-only Games Registry before Store
+   dependencies existed, so the Store could not compose Maze with the Puzzle
+   Service and object storage. Realtime matches could become live without an
+   authoritative participant state and `game.sync.request` returned
+   `GAME_SYNC_REJECTED`.
+2. The frontend parser required `removedIds: []`, while the approved Go wire
+   representation omits that field when the authoritative set is empty.
+
+The API now lets `db.NewWithOptions` construct the production registry after
+Puzzle Service and object-storage dependencies are available. Explicit
+registry injection remains supported for tests and controlled overrides. A
+Store-level regression test proves that the default registry resolves Maze as
+`interfaces.RuntimeGame` while retaining the frozen Arena Core adapter.
+
+The parser now treats only an omitted `removedIds` field as an empty set. A
+non-array value still fails closed. Both corrections have regression tests.
+
+The backend correction is a platform-generic, backward-compatible integration
+bug fix. It changes no Sprint 1 through Sprint 5 business rule or public
+contract, and the complete frozen-sprint regression suite passes.
+
+###### Files Changed
+
+Backend composition and regression:
+
+- `backend/cmd/api/main.go`
+- `backend/internal/db/games_registry_test.go`
+
+Game-neutral frontend:
+
+- `frontend/app/games/page.tsx`
+- `frontend/app/games/interfaces/renderer.ts`
+- `frontend/app/games/registry/catalog.ts`
+- `frontend/app/lib/realtime.ts`
+- `frontend/app/lib/realtime.test.ts`
+
+Maze presentation:
+
+- `frontend/app/games/maze/page.tsx`
+- `frontend/app/games/maze/MazeArena.tsx`
+- `frontend/app/games/maze/accessibility/announcements.ts`
+- `frontend/app/games/maze/accessibility/controls.tsx`
+- `frontend/app/games/maze/animation/transitions.ts`
+- `frontend/app/games/maze/audio/cues.ts`
+- `frontend/app/games/maze/camera/useMazeCamera.ts`
+- `frontend/app/games/maze/protocol/actions.ts`
+- `frontend/app/games/maze/protocol/schemas.ts`
+- `frontend/app/games/maze/protocol/schemas.test.ts`
+- `frontend/app/games/maze/renderer/MazeBoard.tsx`
+- `frontend/app/games/maze/renderer/MazeRenderer.tsx`
+- `frontend/app/games/maze/renderer/MazeRenderer.test.tsx`
+- `frontend/app/games/maze/replay/MazeReplayViewer.tsx`
+- `frontend/app/games/maze/replay/[matchId]/page.tsx`
+
+Quality, styling, and evidence:
+
+- `frontend/e2e/maze-arena.spec.ts`
+- `frontend/playwright.config.ts`
+- `frontend/vitest.config.ts`
+- `frontend/styles/globals.css`
+- `docs/proof/sprint-6-phase-8-maze/*`
+
+###### Public Contracts And Persistence
+
+- Public REST API changes: **none**.
+- WebSocket server contract changes: **none**.
+- Database migrations: **none**.
+- Frozen Sprint 1 through Sprint 5 business contract changes: **none**.
+- Frontend Realtime client changes are additive consumers of the approved
+  Phase 7 `game.action`, `game.sync.request`, `game.action.receipt`, and
+  `game.state.sync` contracts.
+- The renderer registry is frontend-internal and game-neutral. Future games can
+  register another renderer without modifying Realtime transport.
+
+###### Backend Regression Gate
+
+Commands:
+
+```text
+go test ./...
+go vet ./...
+go build ./...
+go mod verify
+```
+
+Result:
+
+- Every backend package passed.
+- Vet passed with no findings.
+- All backend packages built successfully.
+- Module verification returned `all modules verified`.
+- The new production-runtime registry composition test passed.
+- Existing Identity, Arena Hub, Financial Platform, Admin CRM, Realtime Arena,
+  Games Platform, Puzzle Service, generator, solver, replay, and Maze Engine
+  packages passed unchanged.
+
+###### Frontend Regression Gate
+
+Player Platform:
+
+- ESLint passed with zero warnings.
+- TypeScript passed.
+- Vitest: 7 files and 22 tests passed.
+- Next.js `16.2.11` production build completed with `/games/maze` and
+  `/games/maze/replay/[matchId]`.
+- Playwright: 27 passed and 4 intentionally skipped in `5.3m`.
+- The four skips are the expensive full-puzzle replay solve outside desktop
+  Chromium. Maze rendering and authoritative action behavior passed on every
+  configured browser target.
+- Dependency audit found 0 vulnerabilities.
+
+Admin CRM:
+
+- ESLint passed with zero warnings.
+- TypeScript passed.
+- Vitest: 2 files and 5 tests passed.
+- Next.js `16.2.11` production build completed.
+- Playwright: 3 tests passed across desktop, tablet, and mobile in `1.7m`.
+- Dependency audit found 0 vulnerabilities.
+
+Coverage:
+
+- Repository frontend coverage: statements `28.40%`, branches `26.02%`,
+  functions `31.27%`, and lines `30.35%`.
+- Maze protocol parser: statements `80.55%`, branches `73.52%`, functions
+  `100%`, and lines `84.05%`.
+- Maze renderer: statements `83.87%`, branches `57.14%`, functions `81.81%`,
+  and lines `86.66%`.
+- The orchestration and replay-viewer paths are primarily exercised through
+  production-build E2E tests and therefore are not counted by Vitest's V8
+  unit-coverage report.
+
+No minimum frontend coverage threshold was defined for Phase 8. The aggregate
+coverage result is recorded as a baseline for Phase 9 rather than represented
+as comprehensive unit coverage.
+
+###### Browser, Responsive, And Performance Evidence
+
+Authoritative gameplay passed on:
+
+- desktop Chromium;
+- tablet Chromium;
+- mobile Chromium;
+- desktop Firefox 151;
+- desktop WebKit 26.5.
+
+The measured release-build observations are:
+
+| Browser profile | Authoritative board ready | Action to rendered receipt | Horizontal overflow |
+|---|---:|---:|---:|
+| Desktop Chromium | 1004.27 ms | 67.36 ms | 0 px |
+| Tablet Chromium | 533.77 ms | 86.91 ms | 0 px |
+| Mobile Chromium | 1004.92 ms | 70.34 ms | 0 px |
+| Desktop Firefox | 680.60 ms | 88.54 ms | 0 px |
+| Desktop WebKit | 529.38 ms | 211.66 ms | 0 px |
+
+Board-ready timing includes queue entry, authenticated WebSocket setup, server
+puzzle preparation, authoritative state sync, protocol validation, and first
+render. Action timing includes network round trip, authoritative processing,
+receipt validation, reduced-motion presentation, and rendered client cursor.
+It is not a backend-only action benchmark.
+
+Every board-ready observation is below the approved five-second standard match
+hard deadline. Backend-only action processing remains covered by Phase 6 and
+Phase 7 benchmarks. Production P50/P95/P99, CPU, memory, TLS, PostgreSQL,
+Redis, and object-storage measurements remain Phase 9 evidence.
+
+Proof:
+
+- `docs/proof/sprint-6-phase-8-maze/authoritative-desktop-chromium.png`
+- `docs/proof/sprint-6-phase-8-maze/authoritative-tablet-chromium.png`
+- `docs/proof/sprint-6-phase-8-maze/authoritative-mobile-chromium.png`
+- `docs/proof/sprint-6-phase-8-maze/authoritative-desktop-firefox.png`
+- `docs/proof/sprint-6-phase-8-maze/authoritative-desktop-webkit.png`
+- `docs/proof/sprint-6-phase-8-maze/verified-replay-desktop-chromium.png`
+- `docs/proof/sprint-6-phase-8-maze/metrics-*.json`
+
+###### Security And Architecture Evidence
+
+- The client cannot submit accepted state, collision result, progress, combo,
+  score, completion, winner, reward, seed, or solution.
+- The client cannot remove an arrow before receiving an accepted authoritative
+  transition.
+- Expected state version and client sequence accompany every action intent.
+- Protocol version drift and malformed snapshots fail closed.
+- Opponent-private state, seed material, dependencies, solver output, and
+  canonical solutions are absent from the renderer projection.
+- Replay playback requires verified server metadata and committed event
+  history. Invalid replay payloads are rejected rather than simulated.
+- Browser audio, effects, camera, accessibility, and animation affect
+  presentation only.
+- Realtime Arena contains no Maze-specific frontend or server networking rule.
+- Maze contains no authentication, matchmaking, WebSocket, wallet, tournament,
+  or Admin CRM implementation.
+- Player Platform and Admin CRM remain separate builds, authentication
+  surfaces, test suites, and browser applications.
+- No placeholder UI, fake statistic, mock production service, sample level,
+  client puzzle generation, `TODO`, or `FIXME` was introduced in Phase 8.
+
+###### Known Limitations And Remaining Work
+
+- Phase 9 owns production-like PostgreSQL, Redis, S3-compatible storage, TLS,
+  native race, load, stress, reconnect-storm, soak, failover, restart, and
+  infrastructure-failure validation.
+- Phase 9 owns the final 100,000-candidate qualification corpus and complete
+  Sprint 6 freeze evidence package.
+- Cross-platform replay determinism beyond the browser presentation layer
+  remains a Phase 9 system-level gate.
+- WebKit had the slowest observed action-to-rendered-receipt time at
+  `211.66 ms`; this is below the interaction test timeout but remains a useful
+  optimization baseline.
+- Frontend unit coverage is not comprehensive. Phase 9 should add focused
+  orchestration and replay-viewer unit coverage where it improves failure
+  localization without duplicating E2E behavior.
+
+No Critical, High, Medium, or Low unresolved defect was found within the
+authorized Phase 8 scope. The items above are documented Phase 9 hardening and
+freeze gates, not missing Phase 8 implementation.
+
+###### Phase Decision
+
+**APPROVED**
+
+Implementation Phase 9 must not begin until the product owner explicitly
 reviews and approves this validation report.
 
 ##### Public REST API Contracts
@@ -7517,7 +7815,10 @@ Sprint 6 Implementation Phase 6 validation decision is **APPROVED**.
 
 Sprint 6 Implementation Phase 7 validation decision is **APPROVED**.
 
-Implementation Phases 8 and 9 remain **NOT STARTED** and require explicit product-owner authorization.
+Sprint 6 Implementation Phase 8 validation decision is **APPROVED**.
+
+Implementation Phase 9 remains **NOT STARTED** and requires explicit
+product-owner authorization.
 
 ### Sprint 7: Tournaments, Leaderboards, Seasons, And Rewards
 
