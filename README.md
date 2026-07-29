@@ -59,7 +59,7 @@ Do not create frontend placeholders that depend on unfinished backend work. Do n
 
 ### Release 1.0 Architecture
 
-Status: **Sprints 1-5 complete and frozen. Sprint 6 Implementation Phases 1 through 3 are complete and validated; Phase 4 has not started.**
+Status: **Sprints 1-5 complete and frozen. Sprint 6 Implementation Phases 1 through 4 are complete and validated; Phase 5 has not started.**
 
 Release 1.0 is organized as independently owned product domains. A frozen domain may receive bug fixes, security fixes, performance work, scalability work, or integration support, but its business contract may not be silently redesigned by a later sprint.
 
@@ -80,7 +80,7 @@ Skill Arena Release 1.0
 +-- Sprint 5: Realtime Arena                  [COMPLETE - FROZEN]
 |   `-- tag: sprint-5-v1.0-freeze
 |
-+-- Sprint 6: Maze Arena                      [IN PROGRESS - PHASES 1-3 COMPLETE]
++-- Sprint 6: Maze Arena                      [IN PROGRESS - PHASES 1-4 COMPLETE]
 |
 +-- Sprint 7: Competition Platform            [PLANNED]
 |   `-- Seasons, tournaments, leaderboards, and rewards
@@ -5054,6 +5054,380 @@ Implementation Phases 5 through 9 remain **NOT STARTED**.
 **APPROVED**
 
 Implementation Phase 4 must not begin until the product owner explicitly reviews and approves this validation report.
+
+##### Implementation Phase 4 Validation Report
+
+Phase: **Implementation Phase 4 - Authoritative Solver**
+
+Scope: independent occupancy and dependency analysis, deterministic collision simulation, deadlock detection, unique/multiple completion classification, canonical solver metadata, generator cross-verification, Puzzle Service qualification, and solver correctness/performance testing.
+
+Implementation date: **2026-07-29**
+
+Validation date: **2026-07-29**
+
+Implementation commit: `335d0365bd8d34e778a88303fead7a2534a8188d`
+
+Freeze tag: none. A phase approval is not a Sprint 6 freeze.
+
+###### Summary
+
+Implementation Phase 4 delivers the authoritative deterministic solver as an independent server-side verification component. It does not implement replay, gameplay, scoring, rendering, PvP, or match lifecycle behavior.
+
+Delivered:
+
+- Board-only solver authority. The solver receives canonical board geometry, rules/version context, and isolated-arrow policy; it does not receive or trust the generator dependency graph.
+- Independent immutable occupancy index.
+- Independent directional escape-ray dependency derivation.
+- Deterministic nearest-blocker collision calculation.
+- Complete board-exit distance calculation.
+- Structural geometry validation before search.
+- Bounded arrow-count resource policy.
+- Context cancellation through graph construction, recursive depth analysis, and removal simulation.
+- Independent dependency metrics: arrow count, initial open count, edge count, depth, branching, cross dependencies, and isolated arrows.
+- Explicit cycle/deadlock rejection.
+- Isolated competitive-arrow rejection with an intentional tutorial override.
+- Canonical smallest-arrow-ID tie breaking.
+- Unique versus multiple valid completion-order classification without exponential enumeration.
+- Monotonic live-rule removal simulation through every canonical step.
+- Minimum successful action proof equal to arrow count.
+- Versioned canonical dependency hash.
+- Versioned canonical solution hash including sequence, open-choice count, and escape distance.
+- Versioned final-state checksum.
+- Fixed published dependency, solution, and final-state vectors.
+- Stateless and concurrency-safe production solver.
+- `NewQualificationProcessor` production composition for Generator + Solver qualification.
+- Generator acceptance cross-checks between independently produced dependency hashes and difficulty-shape metrics.
+- Fail-closed rejection for solver version mismatch, deadlock, isolation, malformed output, invalid hashes, invalid classification, incorrect action count, dependency disagreement, or metric disagreement.
+- End-to-end Puzzle Service corpus qualification and atomic assignment through the production solver.
+
+Not delivered because it belongs to later phases:
+
+- Replay generation, reconstruction, storage, signing, playback, or disputes.
+- Maze action requests, authoritative participant state, scoring, combo, timing, or completion.
+- Realtime dispatch, PvP synchronization, match lifecycle, or reconnect integration.
+- Client renderer, animation, sound, effects, accessibility, or input.
+
+###### Files Changed
+
+Authoritative solver:
+
+- `backend/internal/games/maze/solver/collision.go`.
+- `backend/internal/games/maze/solver/graph.go`.
+- `backend/internal/games/maze/solver/solution.go`.
+- `backend/internal/games/maze/solver/solver.go`.
+
+Generator verification integration:
+
+- `backend/internal/games/maze/generator/processor.go`.
+
+Tests:
+
+- `backend/internal/games/maze/solver/solver_test.go`.
+- `backend/internal/games/maze/solver/integration_test.go`.
+- `backend/internal/games/maze/generator/generator_test.go`.
+
+Canonical documentation:
+
+- `README.md`.
+
+###### Public Contracts
+
+Public REST APIs: **unchanged**.
+
+Realtime WebSocket protocol: **unchanged**.
+
+Player Platform and Admin CRM contracts: **unchanged**.
+
+Frozen Sprint 1 through Sprint 5 business behavior: **unchanged**.
+
+Refined internal contract:
+
+- `generator.IndependentVerifier` now receives `generator.VerificationInput` containing the immutable board, exact solver version, and isolated-arrow policy.
+- It no longer receives the generator dependency graph.
+- `generator.Verification` now returns exact solver version, independent dependency hash, solver hash, final checksum, classification, minimum actions, and independent graph metrics.
+- `generator.ProductionProcessor` compares solver outputs against generator/analyzer outputs before acceptance.
+
+This internal refinement enforces the previously documented solver-independence contract. No HTTP request, response, event, database record, or frontend type changed.
+
+###### Database
+
+Database migrations: **none**.
+
+Schema changes: **none**.
+
+The existing Phase 2 puzzle metadata stores the accepted solution hash and minimum action count. Phase 4 changes no persistence contract. The solver executes outside repository transactions; only a fully qualified puzzle reaches the existing atomic uniqueness and assignment transaction.
+
+###### Tests Added
+
+Unit and fixture coverage includes:
+
+- Nearest blocker identity, collision cell, and head distance.
+- Complete board-exit distance before removal.
+- Blocker removal followed by a clear path.
+- Canonical unique completion order.
+- Canonical multiple completion order.
+- Open-choice counts.
+- Independent dependency metrics.
+- Cyclic deadlock rejection.
+- Overlapping malformed geometry rejection.
+- Isolated competitive-arrow rejection.
+- Tutorial isolated-arrow allowance.
+- Solver version mismatch.
+- Arrow-count resource limit.
+- Canceled context.
+- Fixed dependency, solution, and final-state hash vectors.
+- Sixty-four concurrent identical solves with byte-identical results.
+- Dependency chains from 2 through 20 arrows proving canonical order and depth.
+- A monotonic transition property proving legal removal never creates a blocker.
+- Malformed-geometry fuzz seeds and sustained fuzz execution.
+
+Integration coverage includes:
+
+- Generator -> independent solver -> metadata cross-check -> hash -> Puzzle Service -> uniqueness claim -> assignment.
+- Thirty-two cryptographically independent Practice puzzle generations.
+- Thirty-two accepted solver qualifications.
+- Thirty-two unique assignments.
+- Persisted solution and validation hashes for every assigned puzzle.
+- Existing generator fail-closed tests updated for the independent board-only contract.
+
+The solver does not import generator placement, candidate ranking, pattern selection, random streams, or declared dependency construction functions.
+
+###### Determinism Vectors
+
+For the approved four-arrow multiple-solution fixture under Solver Version 1:
+
+```text
+Dependency hash:
+sha256:48e3fc73088b2ef1642d601bb8cf7fdafe4678a09c98a20b8894a77e8ad5abab
+
+Solution hash:
+sha256:a0570d683d8f68f584ea9086a5c5a0e39ad5810866d61fb17966a3554215b059
+
+Final checksum:
+sha256:b337ed70ea80948d5f343a83ebe30eb7da95ce9514df2d880c293b08adc411b3
+```
+
+Repeated sequential and 64-way concurrent execution produced the same complete result.
+
+###### Backend Verification
+
+Environment:
+
+```text
+go version go1.26.5 windows/amd64
+Windows AMD64
+Intel Core i7-8665U at 1.90 GHz
+```
+
+Formatting, static analysis, build, and modules:
+
+```text
+gofmt -w internal/games/maze/solver internal/games/maze/generator
+go vet ./...
+go build ./...
+go mod verify
+```
+
+Result:
+
+- All changed Go files are formatted.
+- `go vet`: exit code `0`.
+- `go build`: exit code `0`.
+- Module verification: `all modules verified`.
+
+Full backend regression:
+
+```text
+go test ./... -count=1
+```
+
+Result:
+
+- Exit code `0`.
+- All backend packages compiled.
+- `internal/db` passed in `145.419s`.
+- `internal/realtime` passed in `16.434s`.
+- `internal/server` passed in `17.796s`.
+- `internal/payments` passed in `2.626s`.
+- `internal/games/maze/generator` passed in `5.272s`.
+- `internal/games/maze/solver` passed in `2.936s`.
+
+Race verification:
+
+```text
+CGO_ENABLED=1 go test -race ./internal/games/maze/solver ./internal/games/maze/generator -count=1
+```
+
+Result:
+
+- Solver passed in `3.404s`.
+- Generator passed in `5.117s`.
+- No race report.
+
+Coverage:
+
+```text
+go test ./internal/games/maze/solver -cover -count=1
+```
+
+Result: `90.6%` statement coverage.
+
+Fuzz verification:
+
+```text
+go test ./internal/games/maze/solver -run '^$' \
+  -fuzz FuzzSolverRejectsMalformedGeometry -fuzztime=5s
+```
+
+Result:
+
+- `291699` executions.
+- Approximately `59030` executions/second.
+- 16 additional interesting inputs.
+- No crash, panic, invalid accepted state, or failure.
+
+###### Frontend And Frozen-Sprint Regression Verification
+
+Player Platform:
+
+```text
+npm run lint
+npm run typecheck
+npm test
+npm run build
+npm run test:e2e
+npm audit --audit-level=high --omit=dev
+```
+
+Result:
+
+- ESLint passed with zero warnings.
+- TypeScript passed.
+- Vitest: 5 files and 9 tests passed.
+- Next.js `16.2.11` production build compiled 23 routes.
+- Playwright: 21 tests passed across desktop, tablet, and mobile in `3.7m`.
+- Production dependency audit found 0 vulnerabilities.
+
+Admin CRM:
+
+```text
+npm run lint
+npm run typecheck
+npm test
+npm run build
+npm run test:e2e
+npm audit --audit-level=high --omit=dev
+```
+
+Result:
+
+- ESLint passed with zero warnings.
+- TypeScript passed.
+- Vitest: 2 files and 5 tests passed.
+- Next.js `16.2.11` production build compiled 13 routes.
+- Playwright: 3 tests passed across desktop, tablet, and mobile in `1.0m`.
+- Production dependency audit found 0 vulnerabilities.
+
+No Player Platform or Admin CRM source file changed in Phase 4. Playwright proof images regenerated during validation were restored to their committed versions after the tests.
+
+###### Performance Evidence
+
+Commands:
+
+```text
+go test ./internal/games/maze/solver -run '^$' \
+  -bench 'BenchmarkSolver(Standard|Concurrent)$' -benchmem -count=5
+```
+
+Standard 20-arrow dependency-chain solver:
+
+```text
+163515 ns/op   84532 B/op   397 allocs/op
+163796 ns/op   84532 B/op   397 allocs/op
+161458 ns/op   84531 B/op   397 allocs/op
+164536 ns/op   84531 B/op   397 allocs/op
+165873 ns/op   84532 B/op   397 allocs/op
+```
+
+Parallel solver:
+
+```text
+104053 ns/op   84564 B/op   397 allocs/op
+108251 ns/op   84567 B/op   397 allocs/op
+108576 ns/op   84562 B/op   397 allocs/op
+121319 ns/op   84569 B/op   397 allocs/op
+114214 ns/op   84567 B/op   397 allocs/op
+```
+
+The 20-arrow canonical solver averages approximately `163.8 us` sequentially and `111.3 us` per operation under parallel load. This is well below the approved standard pipeline target of P50 under `100 ms`. Complete generation plus solver latency remains represented by the passing 32-puzzle qualification corpus and will receive profile-class load testing during Phase 9.
+
+###### Security Evidence
+
+Verified:
+
+- The solver is server-only and accepts immutable canonical board data.
+- It receives no client state, claimed result, declared solution, placement order, pattern, seed, wallet, player, admin, or Realtime data.
+- The generator dependency graph is not passed to the solver.
+- Occupancy, dependencies, metrics, completion order, and checksums are independently derived.
+- Exact solver-version mismatch fails closed.
+- Malformed geometry, cycles, runtime deadlocks, prohibited isolation, resource limits, cancellation, and invalid verifier metadata fail closed.
+- A timeout/canceled context is never interpreted as solvable.
+- Canonical ordering is deterministic and independent of map iteration or goroutine scheduling.
+- The solver is stateless and safe for concurrent reuse.
+- Hashes are domain-separated and version-bound.
+- Solver outputs are cross-checked before persistence.
+- No solver output, canonical solution, dependency graph, or hidden metadata is exposed through a public route or active-match payload.
+- No client-authoritative gameplay, replay, scoring, wallet, reward, network, or admin behavior was introduced.
+- New production source contains no TODO, FIXME, placeholder, mock, dummy, sample implementation, floating-point authority, `math/rand`, or hardcoded secret.
+
+###### Architecture Protection Rule
+
+Frozen Sprint 1 through Sprint 5 implementation files changed: **none**.
+
+Boundary verification:
+
+1. Solver implementation is owned by `backend/internal/games/maze/solver`.
+2. The only generator change strengthens the approved verifier boundary.
+3. Realtime Arena contains no Maze solver import, payload, switch, transport, or rule.
+4. Identity, Arena Hub, Financial Platform, Admin CRM, and Realtime business contracts are unchanged.
+5. No public API, event, database, infrastructure, or frontend contract changed.
+6. Complete frozen backend and browser regression suites pass.
+
+Rollback:
+
+- Revert implementation commit `335d0365bd8d34e778a88303fead7a2534a8188d`.
+- No schema, data, route, event, client, or infrastructure rollback is required.
+
+###### Known Limitations And Risks
+
+- Phase 4 implements the solver-side pure collision simulation required for independent verification. Phase 6 still owns the authoritative live Maze Engine action/state implementation and must prove parity against these published collision and solution vectors before accepting player actions.
+- The approved reference application's handcrafted boards use a different geometry convention from the approved Skill Arena canonical head-direction invariant. They are gameplay references, not accepted production solver inputs. Versioned Skill Arena tutorial fixtures remain Phase 6 Maze Engine work.
+- The 32-puzzle generated corpus is an implementation-phase integration gate, not the final 100,000-candidate Sprint 6 qualification corpus required before freeze.
+- Benchmarks use a 20-arrow dependency chain on the development machine. Advanced profile, maximum-bound, load, soak, and reference-infrastructure measurements remain Phase 9 hardening work.
+- Cross-platform execution of the published vectors remains a Sprint 6 freeze requirement. This phase verified Windows AMD64 only.
+- No live gameplay engine exists yet, so solver/live-action parity cannot be claimed until Phase 6.
+
+No limitation above represents missing authorized Implementation Phase 4 scope.
+
+###### Remaining Work
+
+Implementation Phase 5 remains **NOT STARTED** and owns:
+
+- Replay genesis metadata.
+- Maze replay event codec.
+- Exact-version reconstruction.
+- Ordered action replay.
+- Replay validation and integrity hashes.
+- Frozen Realtime replay-signature integration.
+- Under-review failure behavior.
+
+Implementation Phases 6 through 9 remain **NOT STARTED**.
+
+###### Phase Decision
+
+**APPROVED**
+
+Implementation Phase 5 must not begin until the product owner explicitly reviews and approves this validation report.
 
 ##### Public REST API Contracts
 
