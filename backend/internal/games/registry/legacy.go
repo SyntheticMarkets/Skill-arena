@@ -21,6 +21,26 @@ type LegacyModule struct {
 	descriptor interfaces.Descriptor
 }
 
+type RuntimeLegacyModule struct {
+	LegacyModule
+	interfaces.Runtime
+}
+
+type RuntimeDeadlineLegacyModule struct {
+	RuntimeLegacyModule
+	interfaces.DeadlineRuntime
+}
+
+type RuntimeReplayLegacyModule struct {
+	RuntimeLegacyModule
+	interfaces.AuthoritativeReplayRuntime
+}
+
+type RuntimeFullLegacyModule struct {
+	RuntimeDeadlineLegacyModule
+	interfaces.AuthoritativeReplayRuntime
+}
+
 func (m LegacyModule) Descriptor() interfaces.Descriptor {
 	return m.descriptor.Clone()
 }
@@ -30,6 +50,25 @@ func (m LegacyModule) CoreModule() core.GameModule {
 }
 
 func LegacyRegistration(module core.GameModule, versions LegacyVersions) (Registration, error) {
+	return legacyRegistration(module, nil, versions)
+}
+
+func RuntimeLegacyRegistration(
+	module core.GameModule,
+	runtime interfaces.Runtime,
+	versions LegacyVersions,
+) (Registration, error) {
+	if runtime == nil {
+		return Registration{}, fmt.Errorf("%w: game runtime is required", ErrInvalidDescriptor)
+	}
+	return legacyRegistration(module, runtime, versions)
+}
+
+func legacyRegistration(
+	module core.GameModule,
+	runtime interfaces.Runtime,
+	versions LegacyVersions,
+) (Registration, error) {
 	if module == nil {
 		return Registration{}, fmt.Errorf("%w: legacy module is required", ErrInvalidDescriptor)
 	}
@@ -44,7 +83,32 @@ func LegacyRegistration(module core.GameModule, versions LegacyVersions) (Regist
 	return Registration{
 		Descriptor: descriptor,
 		Factory: func() (interfaces.Module, error) {
-			return LegacyModule{module: module, descriptor: descriptor}, nil
+			legacy := LegacyModule{module: module, descriptor: descriptor}
+			if runtime != nil {
+				combined := RuntimeLegacyModule{LegacyModule: legacy, Runtime: runtime}
+				deadline, hasDeadline := runtime.(interfaces.DeadlineRuntime)
+				replay, hasReplay := runtime.(interfaces.AuthoritativeReplayRuntime)
+				if hasDeadline && hasReplay {
+					return RuntimeFullLegacyModule{
+						RuntimeDeadlineLegacyModule: RuntimeDeadlineLegacyModule{
+							RuntimeLegacyModule: combined, DeadlineRuntime: deadline,
+						},
+						AuthoritativeReplayRuntime: replay,
+					}, nil
+				}
+				if hasDeadline {
+					return RuntimeDeadlineLegacyModule{
+						RuntimeLegacyModule: combined, DeadlineRuntime: deadline,
+					}, nil
+				}
+				if hasReplay {
+					return RuntimeReplayLegacyModule{
+						RuntimeLegacyModule: combined, AuthoritativeReplayRuntime: replay,
+					}, nil
+				}
+				return combined, nil
+			}
+			return legacy, nil
 		},
 	}, nil
 }

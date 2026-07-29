@@ -56,6 +56,13 @@ func (r *ObjectRepository) key(replayID string) string {
 	return path.Join(r.prefix, replayID+".json")
 }
 
+func (r *ObjectRepository) StorageKey(replayID string) (string, error) {
+	if err := validateReplayID(replayID); err != nil {
+		return "", err
+	}
+	return r.key(replayID), nil
+}
+
 func validateReplayID(replayID string) error {
 	if strings.TrimSpace(replayID) == "" || len(replayID) > maxIdentitySize ||
 		strings.ContainsAny(replayID, `/\`) || strings.Contains(replayID, "..") {

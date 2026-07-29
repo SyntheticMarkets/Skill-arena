@@ -14,7 +14,7 @@
   "versions": {
     "game": "1.0.0",
     "rules": "v1.0.0",
-    "replay": "v1",
+    "replay": "v2",
     "protocol": "v1"
   },
   "capabilities": {

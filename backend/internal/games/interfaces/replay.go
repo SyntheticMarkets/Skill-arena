@@ -7,9 +7,13 @@ import (
 )
 
 type ReplaySource struct {
-	MatchID string        `json:"matchId"`
-	States  []GameState   `json:"states"`
-	Events  []ReplayEvent `json:"events"`
+	ReplayID        string        `json:"replayId"`
+	MatchID         string        `json:"matchId"`
+	States          []GameState   `json:"states"`
+	Events          []ReplayEvent `json:"events"`
+	Outcome         MatchOutcome  `json:"outcome"`
+	StartedAtUnixMS int64         `json:"startedAtUnixMs"`
+	EndedAtUnixMS   int64         `json:"endedAtUnixMs"`
 }
 
 type ReplayMetadata struct {
@@ -21,11 +25,31 @@ type ReplayMetadata struct {
 }
 
 type ReplayEvent struct {
-	Sequence     int64           `json:"sequence"`
-	StateVersion int64           `json:"stateVersion"`
-	OccurredAt   time.Time       `json:"occurredAt"`
-	Kind         string          `json:"kind"`
-	Payload      json.RawMessage `json:"payload"`
+	Sequence      int64           `json:"sequence"`
+	StateVersion  int64           `json:"stateVersion"`
+	OccurredAt    time.Time       `json:"occurredAt"`
+	ParticipantID string          `json:"participantId,omitempty"`
+	Kind          string          `json:"kind"`
+	Payload       json.RawMessage `json:"payload"`
+}
+
+type FinalizedReplay struct {
+	ReplayID      string               `json:"replayId"`
+	ReplayHash    string               `json:"replayHash"`
+	EventRootHash string               `json:"eventRootHash"`
+	EventCount    int                  `json:"eventCount"`
+	Proof         ReplayIntegrityProof `json:"proof"`
+	StorageKey    string               `json:"storageKey"`
+	Status        string               `json:"status"`
+}
+
+type AuthoritativeReplayRuntime interface {
+	FinalizeAuthoritativeReplay(
+		context.Context,
+		MatchContext,
+		ReplaySource,
+		ReplayIntegrityService,
+	) (FinalizedReplay, error)
 }
 
 type ReplayIntegrityRequest struct {

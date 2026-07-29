@@ -1,0 +1,716 @@
+package session
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"skill-arena/internal/db"
+	"skill-arena/internal/games/interfaces"
+	"skill-arena/internal/games/shared"
+	"skill-arena/internal/id"
+	"skill-arena/internal/models"
+)
+
+var (
+	ErrRuntimeUnavailable = errors.New("game runtime is unavailable")
+	ErrActionConflict     = errors.New("game action conflicts with authoritative state")
+	ErrActionSequence     = errors.New("game action sequence has a gap")
+	ErrDuplicateMismatch  = errors.New("duplicate game action does not match its original request")
+)
+
+type Service struct {
+	store *db.Store
+	now   func() time.Time
+}
+
+type ActionResult struct {
+	Receipt    models.GameActionReceipt     `json:"receipt"`
+	Snapshot   interfaces.RendererSnapshot  `json:"snapshot"`
+	Events     []models.RealtimeEvent       `json:"events"`
+	Completion *interfaces.CompletionResult `json:"completion,omitempty"`
+	Outcome    *interfaces.MatchOutcome     `json:"outcome,omitempty"`
+	Duplicate  bool                         `json:"duplicate"`
+}
+
+type SyncResult struct {
+	Snapshot           interfaces.RendererSnapshot `json:"snapshot"`
+	StateVersion       int64                       `json:"stateVersion"`
+	LastClientSequence int64                       `json:"lastClientSequence"`
+	LastServerSequence int64                       `json:"lastServerSequence"`
+}
+
+type ExpiredMatch struct {
+	MatchID string
+	Outcome interfaces.MatchOutcome
+}
+
+func New(store *db.Store) (*Service, error) {
+	if store == nil || store.GamesRegistry() == nil {
+		return nil, errors.New("game session dependencies are unavailable")
+	}
+	return &Service{store: store, now: time.Now}, nil
+}
+
+func (s *Service) PrepareMatch(ctx context.Context, match *models.RealtimeMatch) error {
+	if match == nil || len(match.Participants) == 0 {
+		return errors.New("realtime match and participants are required")
+	}
+	if _, err := s.store.GetGameParticipantState(
+		ctx, match.ID, match.Participants[0].UserID,
+	); err == nil {
+		return nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	runtime, descriptor, err := s.resolve(match)
+	if err != nil {
+		return err
+	}
+	participantIDs := make([]string, len(match.Participants))
+	for index, participant := range match.Participants {
+		participantIDs[index] = participant.UserID
+	}
+	matchContext := runtimeMatchContext(match, descriptor, participantIDs, s.now().UTC())
+	generated, err := runtime.GenerateState(ctx, matchContext, interfaces.GenerationRequest{
+		Mode: match.Mode, SeedReference: match.SeedReference,
+	})
+	if err != nil {
+		return fmt.Errorf("generate authoritative game state: %w", err)
+	}
+	sharedState, err := runtime.InitializeMatch(ctx, matchContext, interfaces.MatchRequest{
+		Mode: match.Mode, Configuration: generated.Metadata,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize authoritative match: %w", err)
+	}
+	now := s.now().UTC()
+	states := make([]models.GameParticipantState, 0, len(match.Participants))
+	for _, participant := range match.Participants {
+		gameState, stateErr := runtime.InitializeParticipant(ctx, interfaces.ParticipantContext{
+			MatchID: match.ID, ParticipantID: participant.UserID,
+			UserID: participant.UserID, ViewerRole: "player",
+		}, sharedState)
+		if stateErr != nil {
+			return fmt.Errorf("initialize participant %s: %w", participant.UserID, stateErr)
+		}
+		encoded, stateErr := json.Marshal(gameState)
+		if stateErr != nil {
+			return stateErr
+		}
+		states = append(states, models.GameParticipantState{
+			MatchID: match.ID, UserID: participant.UserID, GameID: match.GameID,
+			PuzzleID: generated.Reference, StateSchema: gameState.SchemaVersion,
+			StateVersion: gameState.Version, State: encoded,
+			StateChecksum: gameState.Checksum, Status: "active", UpdatedAt: now,
+		})
+	}
+	payload, err := json.Marshal(map[string]any{
+		"gameId": match.GameID, "gameVersion": match.GameVersion,
+		"puzzleReference":     generated.Reference,
+		"sharedStateChecksum": sharedState.Checksum,
+		"participantCount":    len(states),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.store.CreateGameParticipantStates(ctx, states, models.GameEventDraft{
+		Type: "game.puzzle.ready", Payload: payload,
+	})
+	if errors.Is(err, db.ErrRealtimeConflict) {
+		_, loadErr := s.store.GetGameParticipantState(ctx, match.ID, match.Participants[0].UserID)
+		return loadErr
+	}
+	return err
+}
+
+func (s *Service) SubmitAction(
+	ctx context.Context,
+	match *models.RealtimeMatch,
+	userID string,
+	envelope interfaces.ActionEnvelope,
+	latency time.Duration,
+) (ActionResult, error) {
+	if match == nil {
+		return ActionResult{}, ErrActionConflict
+	}
+	if envelope.MatchID != match.ID || strings.TrimSpace(userID) == "" {
+		return ActionResult{}, ErrActionConflict
+	}
+	payloadHash := shared.HashFields(
+		"skill-arena/game-action-request/v1", envelope.ActionID, envelope.MatchID,
+		userID, envelope.Kind, string(envelope.Payload),
+		fmt.Sprint(envelope.ClientSequence), fmt.Sprint(envelope.ExpectedStateVersion),
+	)
+	if duplicate, err := s.duplicate(
+		ctx, match, userID, envelope, payloadHash,
+	); err == nil {
+		return duplicate, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return ActionResult{}, err
+	}
+	if match.Status != models.MatchLive {
+		return ActionResult{}, ErrActionConflict
+	}
+	lockKey := "game:action:" + match.ID
+	var lockToken string
+	lockDeadline := time.NewTimer(2 * time.Second)
+	defer lockDeadline.Stop()
+	for {
+		var locked bool
+		var lockErr error
+		lockToken, locked, lockErr = s.store.Redis().Lock(ctx, lockKey, 5*time.Second)
+		if lockErr != nil {
+			return ActionResult{}, lockErr
+		}
+		if locked {
+			break
+		}
+		if duplicate, duplicateErr := s.duplicate(
+			ctx, match, userID, envelope, payloadHash,
+		); duplicateErr == nil {
+			return duplicate, nil
+		} else if !errors.Is(duplicateErr, sql.ErrNoRows) {
+			return ActionResult{}, duplicateErr
+		}
+		select {
+		case <-ctx.Done():
+			return ActionResult{}, ctx.Err()
+		case <-lockDeadline.C:
+			return ActionResult{}, db.ErrRealtimeConflict
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	defer s.store.Redis().Unlock(context.Background(), lockKey, lockToken)
+
+	if duplicate, err := s.duplicate(
+		ctx, match, userID, envelope, payloadHash,
+	); err == nil {
+		return duplicate, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return ActionResult{}, err
+	}
+	record, err := s.store.GetGameParticipantState(ctx, match.ID, userID)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if envelope.ClientSequence != record.LastClientSequence+1 {
+		return ActionResult{}, ErrActionSequence
+	}
+	if envelope.ExpectedStateVersion != record.StateVersion {
+		return ActionResult{}, ErrActionConflict
+	}
+	runtime, descriptor, err := s.resolve(match)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	var current interfaces.GameState
+	if err := json.Unmarshal(record.State, &current); err != nil {
+		return ActionResult{}, err
+	}
+	receivedAt := s.now().UTC()
+	actionContext := interfaces.ActionContext{
+		MatchID: match.ID, ParticipantID: userID, UserID: userID,
+		ServerReceivedAt: receivedAt, Latency: latency,
+		CurrentSequence:     envelope.ClientSequence,
+		CurrentStateVersion: record.StateVersion,
+	}
+	validated, err := runtime.ValidateAction(ctx, actionContext, current, envelope)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	transition, err := runtime.ApplyAction(ctx, actionContext, current, validated)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	transitionBytes, err := json.Marshal(transition)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	nextStateBytes, err := json.Marshal(transition.NextState)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	status := "active"
+	if transition.Completion != nil {
+		switch transition.Completion.Status {
+		case "complete":
+			status = "completed"
+		case "timeout":
+			status = "timed_out"
+		}
+	}
+	next := *record
+	next.StateSchema = transition.NextState.SchemaVersion
+	next.StateVersion = transition.NextState.Version
+	next.State = nextStateBytes
+	next.StateChecksum = transition.NextState.Checksum
+	next.LastClientSequence = envelope.ClientSequence
+	next.Status = status
+	next.UpdatedAt = receivedAt
+	drafts, err := actionEvents(envelope, transition, receivedAt)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	receipt := models.GameActionReceipt{
+		ActionID: envelope.ActionID, MatchID: match.ID, UserID: userID,
+		ClientSequence:       envelope.ClientSequence,
+		ExpectedStateVersion: envelope.ExpectedStateVersion,
+		ActionKind:           envelope.Kind, ActionPayloadHash: payloadHash,
+		Accepted: transition.Accepted, ResultCode: transition.Code,
+		StateVersionBefore: record.StateVersion,
+		StateVersionAfter:  transition.NextState.Version,
+		Transition:         transitionBytes, ServerReceivedAt: receivedAt, ProcessedAt: s.now().UTC(),
+	}
+	receipt.ReceiptHash = shared.HashFields(
+		"skill-arena/game-action-receipt/v1", receipt.ActionID, receipt.MatchID,
+		receipt.UserID, receipt.ActionPayloadHash, receipt.ResultCode,
+		fmt.Sprint(receipt.StateVersionBefore), fmt.Sprint(receipt.StateVersionAfter),
+		string(receipt.Transition), receipt.ServerReceivedAt.Format(time.RFC3339Nano),
+	)
+	committed, events, err := s.store.CommitGameAction(ctx, *record, next, receipt, drafts)
+	if errors.Is(err, db.ErrRealtimeConflict) {
+		return s.duplicate(ctx, match, userID, envelope, payloadHash)
+	}
+	if err != nil {
+		return ActionResult{}, err
+	}
+	snapshot, err := runtime.Snapshot(ctx, interfaces.ViewerContext{
+		MatchID: match.ID, UserID: userID, ParticipantID: userID, Role: "player",
+	}, transition.NextState)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	result := ActionResult{
+		Receipt: *committed, Snapshot: snapshot, Events: events,
+		Completion: transition.Completion,
+	}
+	if transition.Completion != nil {
+		outcome, outcomeErr := s.determineOutcome(ctx, runtime, descriptor, match)
+		if outcomeErr != nil {
+			return ActionResult{}, outcomeErr
+		}
+		result.Outcome = &outcome
+	}
+	return result, nil
+}
+
+func (s *Service) Sync(
+	ctx context.Context,
+	match *models.RealtimeMatch,
+	userID, role string,
+) (SyncResult, error) {
+	if match == nil {
+		return SyncResult{}, ErrActionConflict
+	}
+	record, err := s.store.GetGameParticipantState(ctx, match.ID, userID)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	runtime, _, err := s.resolve(match)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	var state interfaces.GameState
+	if err := json.Unmarshal(record.State, &state); err != nil {
+		return SyncResult{}, err
+	}
+	if role == "" {
+		role = "player"
+	}
+	snapshot, err := runtime.Snapshot(ctx, interfaces.ViewerContext{
+		MatchID: match.ID, UserID: userID, ParticipantID: userID, Role: role,
+	}, state)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	return SyncResult{
+		Snapshot: snapshot, StateVersion: record.StateVersion,
+		LastClientSequence: record.LastClientSequence,
+		LastServerSequence: record.LastServerSequence,
+	}, nil
+}
+
+func (s *Service) ExpireDue(
+	ctx context.Context,
+	serverTime time.Time,
+) ([]ExpiredMatch, error) {
+	records, err := s.store.ListActiveGameParticipantStates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	affected := map[string]bool{}
+	for _, candidate := range records {
+		match, err := s.store.GetRealtimeMatch(ctx, candidate.MatchID)
+		if err != nil {
+			return nil, err
+		}
+		if match.Status != models.MatchLive && match.Status != models.MatchPaused &&
+			match.Status != models.MatchReconnecting {
+			continue
+		}
+		runtime, descriptor, err := s.resolve(match)
+		if err != nil {
+			return nil, err
+		}
+		deadlineRuntime, ok := runtime.(interfaces.DeadlineRuntime)
+		if !ok {
+			continue
+		}
+		lockKey := "game:action:" + match.ID
+		token, locked, err := s.store.Redis().Lock(ctx, lockKey, 5*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		if !locked {
+			continue
+		}
+		current, loadErr := s.store.GetGameParticipantState(
+			ctx, candidate.MatchID, candidate.UserID,
+		)
+		if loadErr != nil {
+			_ = s.store.Redis().Unlock(context.Background(), lockKey, token)
+			return nil, loadErr
+		}
+		var state interfaces.GameState
+		if err := json.Unmarshal(current.State, &state); err != nil {
+			_ = s.store.Redis().Unlock(context.Background(), lockKey, token)
+			return nil, err
+		}
+		participantIDs := make([]string, len(match.Participants))
+		for index, participant := range match.Participants {
+			participantIDs[index] = participant.UserID
+		}
+		transition, expireErr := deadlineRuntime.Expire(
+			ctx, runtimeMatchContext(match, descriptor, participantIDs, serverTime),
+			state, serverTime,
+		)
+		if expireErr != nil {
+			_ = s.store.Redis().Unlock(context.Background(), lockKey, token)
+			return nil, expireErr
+		}
+		if len(transition.NextState.Payload) != 0 {
+			transitionBytes, marshalErr := json.Marshal(transition)
+			if marshalErr != nil {
+				_ = s.store.Redis().Unlock(context.Background(), lockKey, token)
+				return nil, marshalErr
+			}
+			nextStateBytes, marshalErr := json.Marshal(transition.NextState)
+			if marshalErr != nil {
+				_ = s.store.Redis().Unlock(context.Background(), lockKey, token)
+				return nil, marshalErr
+			}
+			next := *current
+			next.StateSchema = transition.NextState.SchemaVersion
+			next.StateVersion = transition.NextState.Version
+			next.State = nextStateBytes
+			next.StateChecksum = transition.NextState.Checksum
+			next.Status = "timed_out"
+			next.UpdatedAt = serverTime.UTC()
+			payload, marshalErr := json.Marshal(map[string]any{
+				"participantId": current.UserID, "code": transition.Code,
+				"transition": json.RawMessage(transitionBytes),
+			})
+			if marshalErr != nil {
+				_ = s.store.Redis().Unlock(context.Background(), lockKey, token)
+				return nil, marshalErr
+			}
+			drafts := []models.GameEventDraft{{
+				Type: "game.participant.timed_out", Payload: payload,
+			}}
+			for _, event := range transition.Events {
+				drafts = append(drafts, models.GameEventDraft{
+					Type: event.Kind, Payload: event.Payload,
+				})
+			}
+			if _, commitErr := s.store.CommitGameSystemTransition(
+				ctx, *current, next, drafts,
+			); commitErr != nil && !errors.Is(commitErr, db.ErrRealtimeConflict) {
+				_ = s.store.Redis().Unlock(context.Background(), lockKey, token)
+				return nil, commitErr
+			}
+			affected[match.ID] = true
+		}
+		_ = s.store.Redis().Unlock(context.Background(), lockKey, token)
+	}
+	results := make([]ExpiredMatch, 0, len(affected))
+	for matchID := range affected {
+		match, err := s.store.GetRealtimeMatch(ctx, matchID)
+		if err != nil {
+			return nil, err
+		}
+		runtime, descriptor, err := s.resolve(match)
+		if err != nil {
+			return nil, err
+		}
+		outcome, err := s.determineOutcome(ctx, runtime, descriptor, match)
+		if err != nil {
+			return nil, err
+		}
+		if outcome.Status != "incomplete" {
+			results = append(results, ExpiredMatch{MatchID: matchID, Outcome: outcome})
+		}
+	}
+	return results, nil
+}
+
+func (s *Service) Forfeit(
+	ctx context.Context,
+	matchID, userID string,
+	serverTime time.Time,
+) error {
+	record, err := s.store.GetGameParticipantState(ctx, matchID, userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil || record.Status != "active" {
+		return err
+	}
+	next := *record
+	next.Status = "forfeited"
+	next.UpdatedAt = serverTime.UTC()
+	payload, err := json.Marshal(map[string]any{
+		"participantId": userID, "reason": "participant_left",
+		"stateVersion": record.StateVersion, "stateChecksum": record.StateChecksum,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.store.CommitGameSystemTransition(
+		ctx, *record, next,
+		[]models.GameEventDraft{{Type: "game.participant.forfeited", Payload: payload}},
+	)
+	return err
+}
+
+func (s *Service) FinalizeReplay(
+	ctx context.Context,
+	match *models.RealtimeMatch,
+	integrity interfaces.ReplayIntegrityService,
+) (interfaces.FinalizedReplay, error) {
+	if match == nil || match.StartedAt == nil || match.CompletedAt == nil {
+		return interfaces.FinalizedReplay{}, errors.New("terminal match timing is incomplete")
+	}
+	runtime, descriptor, err := s.resolve(match)
+	if err != nil {
+		return interfaces.FinalizedReplay{}, err
+	}
+	finalizer, ok := runtime.(interfaces.AuthoritativeReplayRuntime)
+	if !ok {
+		return interfaces.FinalizedReplay{}, ErrRuntimeUnavailable
+	}
+	records, err := s.store.ListGameParticipantStates(ctx, match.ID)
+	if err != nil {
+		return interfaces.FinalizedReplay{}, err
+	}
+	states := make([]interfaces.GameState, 0, len(records))
+	participantIDs := make([]string, 0, len(records))
+	for _, record := range records {
+		var state interfaces.GameState
+		if err := json.Unmarshal(record.State, &state); err != nil {
+			return interfaces.FinalizedReplay{}, err
+		}
+		states = append(states, state)
+		participantIDs = append(participantIDs, record.UserID)
+	}
+	outcome, err := runtime.DetermineWinner(
+		ctx, runtimeMatchContext(match, descriptor, participantIDs, match.CompletedAt.UTC()),
+		states,
+	)
+	if err != nil {
+		return interfaces.FinalizedReplay{}, err
+	}
+	if outcome.Status == "incomplete" {
+		outcome = terminalOutcome(match, records)
+	}
+	var realtimeEvents []models.RealtimeEvent
+	var after int64
+	for {
+		page, err := s.store.RealtimeEventsAfter(ctx, match.ID, after, 500)
+		if err != nil {
+			return interfaces.FinalizedReplay{}, err
+		}
+		realtimeEvents = append(realtimeEvents, page...)
+		if len(page) < 500 {
+			break
+		}
+		after = page[len(page)-1].Sequence
+	}
+	events := make([]interfaces.ReplayEvent, len(realtimeEvents))
+	for index, event := range realtimeEvents {
+		events[index] = interfaces.ReplayEvent{
+			Sequence: event.Sequence, StateVersion: event.StateVersion,
+			OccurredAt: event.ServerTime, ParticipantID: event.UserID,
+			Kind: event.Type, Payload: append(json.RawMessage(nil), event.Payload...),
+		}
+	}
+	return finalizer.FinalizeAuthoritativeReplay(
+		ctx,
+		runtimeMatchContext(match, descriptor, participantIDs, match.CompletedAt.UTC()),
+		interfaces.ReplaySource{
+			ReplayID: id.Replay(), MatchID: match.ID, States: states, Events: events,
+			Outcome: outcome, StartedAtUnixMS: match.StartedAt.UnixMilli(),
+			EndedAtUnixMS: match.CompletedAt.UnixMilli(),
+		},
+		integrity,
+	)
+}
+
+func terminalOutcome(
+	match *models.RealtimeMatch,
+	records []models.GameParticipantState,
+) interfaces.MatchOutcome {
+	if match.Status == models.MatchCancelled || match.Status == models.MatchAbandoned {
+		return interfaces.MatchOutcome{Status: "canceled", Reason: "match_terminated"}
+	}
+	forfeited := map[string]bool{}
+	for _, record := range records {
+		if record.Status == "forfeited" {
+			forfeited[record.UserID] = true
+		}
+	}
+	if len(forfeited) > 0 {
+		winners := make([]string, 0, len(records)-len(forfeited))
+		losers := make([]string, 0, len(forfeited))
+		for _, record := range records {
+			if forfeited[record.UserID] {
+				losers = append(losers, record.UserID)
+			} else {
+				winners = append(winners, record.UserID)
+			}
+		}
+		if len(winners) > 0 {
+			return interfaces.MatchOutcome{
+				Status: "complete", WinnerIDs: winners,
+				LoserIDs: losers, Reason: "participant_forfeit",
+			}
+		}
+	}
+	return interfaces.MatchOutcome{Status: "canceled", Reason: "no_verified_winner"}
+}
+
+func (s *Service) duplicate(
+	ctx context.Context,
+	match *models.RealtimeMatch,
+	userID string,
+	envelope interfaces.ActionEnvelope,
+	payloadHash string,
+) (ActionResult, error) {
+	receipt, err := s.store.GetGameActionReceipt(
+		ctx, match.ID, userID, envelope.ActionID, envelope.ClientSequence,
+	)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if receipt.MatchID != match.ID || receipt.UserID != userID ||
+		receipt.ActionID != envelope.ActionID ||
+		receipt.ClientSequence != envelope.ClientSequence ||
+		receipt.ActionPayloadHash != payloadHash {
+		return ActionResult{}, ErrDuplicateMismatch
+	}
+	var transition interfaces.Transition
+	if err := json.Unmarshal(receipt.Transition, &transition); err != nil {
+		return ActionResult{}, err
+	}
+	runtime, _, err := s.resolve(match)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	snapshot, err := runtime.Snapshot(ctx, interfaces.ViewerContext{
+		MatchID: match.ID, UserID: userID, ParticipantID: userID, Role: "player",
+	}, transition.NextState)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	return ActionResult{
+		Receipt: *receipt, Snapshot: snapshot,
+		Completion: transition.Completion, Duplicate: true,
+	}, nil
+}
+
+func (s *Service) determineOutcome(
+	ctx context.Context,
+	runtime interfaces.RuntimeGame,
+	descriptor interfaces.Descriptor,
+	match *models.RealtimeMatch,
+) (interfaces.MatchOutcome, error) {
+	records, err := s.store.ListGameParticipantStates(ctx, match.ID)
+	if err != nil {
+		return interfaces.MatchOutcome{}, err
+	}
+	states := make([]interfaces.GameState, 0, len(records))
+	participants := make([]string, 0, len(records))
+	for _, record := range records {
+		var state interfaces.GameState
+		if err := json.Unmarshal(record.State, &state); err != nil {
+			return interfaces.MatchOutcome{}, err
+		}
+		states = append(states, state)
+		participants = append(participants, record.UserID)
+	}
+	return runtime.DetermineWinner(
+		ctx, runtimeMatchContext(match, descriptor, participants, s.now().UTC()), states,
+	)
+}
+
+func (s *Service) resolve(
+	match *models.RealtimeMatch,
+) (interfaces.RuntimeGame, interfaces.Descriptor, error) {
+	module, err := s.store.GamesRegistry().Resolve(match.GameID, match.GameVersion)
+	if err != nil {
+		return nil, interfaces.Descriptor{}, fmt.Errorf("%w: %v", ErrRuntimeUnavailable, err)
+	}
+	runtime, ok := module.(interfaces.RuntimeGame)
+	if !ok {
+		return nil, interfaces.Descriptor{}, ErrRuntimeUnavailable
+	}
+	return runtime, module.Descriptor(), nil
+}
+
+func runtimeMatchContext(
+	match *models.RealtimeMatch,
+	descriptor interfaces.Descriptor,
+	participants []string,
+	serverTime time.Time,
+) interfaces.MatchContext {
+	return interfaces.MatchContext{
+		MatchID: match.ID, GameID: match.GameID, Mode: match.Mode,
+		Region: match.Region, ParticipantIDs: append([]string(nil), participants...),
+		Versions: descriptor.Versions, ServerTime: serverTime,
+	}
+}
+
+func actionEvents(
+	envelope interfaces.ActionEnvelope,
+	transition interfaces.Transition,
+	receivedAt time.Time,
+) ([]models.GameEventDraft, error) {
+	payload, err := json.Marshal(map[string]any{
+		"actionId": envelope.ActionID, "kind": envelope.Kind,
+		"payload":              json.RawMessage(envelope.Payload),
+		"clientSequence":       envelope.ClientSequence,
+		"expectedStateVersion": envelope.ExpectedStateVersion,
+		"accepted":             transition.Accepted, "code": transition.Code,
+		"stateVersion":  transition.NextState.Version,
+		"stateChecksum": transition.NextState.Checksum,
+		"occurredAtMs":  receivedAt.UnixMilli(),
+		"progress":      json.RawMessage(transition.Progress),
+		"presentation":  json.RawMessage(transition.Presentation),
+	})
+	if err != nil {
+		return nil, err
+	}
+	drafts := []models.GameEventDraft{{
+		Type: "game.action.processed", Payload: payload,
+	}}
+	for _, event := range transition.Events {
+		drafts = append(drafts, models.GameEventDraft{
+			Type: event.Kind, Payload: append(json.RawMessage(nil), event.Payload...),
+		})
+	}
+	return drafts, nil
+}

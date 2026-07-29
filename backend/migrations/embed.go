@@ -26,3 +26,8 @@ var RealtimeArena string
 //
 //go:embed 008_games_puzzle_service.sql
 var GamesPuzzleService string
+
+// GamesRuntime is the additive Sprint 6 Phase 7 participant-state and action schema.
+//
+//go:embed 009_games_runtime.sql
+var GamesRuntime string

@@ -3,6 +3,7 @@ package interfaces
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 type ModuleStatus string
@@ -55,9 +56,10 @@ type Module interface {
 	Descriptor() Descriptor
 }
 
-// RuntimeGame is the game-neutral execution contract implemented by production games.
-type RuntimeGame interface {
-	Module
+// Runtime is the game-neutral execution contract implemented by production games.
+// It is separated from Module so compatibility adapters can combine an existing
+// module descriptor with a new runtime without changing frozen module contracts.
+type Runtime interface {
 	InitializeMatch(context.Context, MatchContext, MatchRequest) (GameState, error)
 	InitializeParticipant(context.Context, ParticipantContext, GameState) (GameState, error)
 	GenerateState(context.Context, MatchContext, GenerationRequest) (GeneratedState, error)
@@ -69,6 +71,16 @@ type RuntimeGame interface {
 	SerializeReplay(context.Context, ReplaySource) (ReplayMetadata, error)
 	RestoreReplay(context.Context, ReplayMetadata, []ReplayEvent) (GameState, error)
 	Cleanup(context.Context, MatchContext) (CleanupInstructions, error)
+}
+
+type RuntimeGame interface {
+	Module
+	Runtime
+}
+
+// DeadlineRuntime is optional because not every game has a server deadline.
+type DeadlineRuntime interface {
+	Expire(context.Context, MatchContext, GameState, time.Time) (Transition, error)
 }
 
 type MatchRequest struct {

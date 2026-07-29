@@ -3,6 +3,7 @@ package realtime
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -10,6 +11,8 @@ import (
 
 	"skill-arena/internal/config"
 	"skill-arena/internal/db"
+	"skill-arena/internal/games/interfaces"
+	gamesession "skill-arena/internal/games/session"
 	"skill-arena/internal/id"
 
 	"github.com/gorilla/websocket"
@@ -28,11 +31,16 @@ type Gateway struct {
 }
 
 type clientMessage struct {
-	Type          string `json:"type"`
-	MatchID       string `json:"matchId,omitempty"`
-	AfterSequence int64  `json:"afterSequence,omitempty"`
-	LatencyMS     int    `json:"latencyMs,omitempty"`
-	Region        string `json:"region,omitempty"`
+	Type                 string          `json:"type"`
+	MatchID              string          `json:"matchId,omitempty"`
+	AfterSequence        int64           `json:"afterSequence,omitempty"`
+	LatencyMS            int             `json:"latencyMs,omitempty"`
+	Region               string          `json:"region,omitempty"`
+	ActionID             string          `json:"actionId,omitempty"`
+	Kind                 string          `json:"kind,omitempty"`
+	Payload              json.RawMessage `json:"payload,omitempty"`
+	ClientSequence       int64           `json:"clientSequence,omitempty"`
+	ExpectedStateVersion int64           `json:"expectedStateVersion,omitempty"`
 }
 
 func NewGateway(store *db.Store, service *Service, cfg *config.Config) *Gateway {
@@ -157,7 +165,14 @@ func (g *Gateway) ServeAuthenticated(w http.ResponseWriter, r *http.Request, use
 					continue
 				}
 				matchID, sequence = match.ID, message.AfterSequence
-				_ = g.write(conn, map[string]any{"type": "state.sync", "match": match, "events": events, "serverTime": time.Now().UTC()})
+				response := map[string]any{
+					"type": "state.sync", "match": match, "events": events,
+					"serverTime": time.Now().UTC(),
+				}
+				if game, syncErr := g.service.GameSync(r.Context(), userID, match.ID); syncErr == nil {
+					response["game"] = game
+				}
+				_ = g.write(conn, response)
 				if len(events) > 0 {
 					sequence = events[len(events)-1].Sequence
 				}
@@ -177,6 +192,38 @@ func (g *Gateway) ServeAuthenticated(w http.ResponseWriter, r *http.Request, use
 				}
 				_ = g.write(conn, map[string]any{"type": "match.status", "match": match})
 				matchID = ""
+			case "game.action":
+				result, err := g.service.GameAction(
+					r.Context(), userID, message.MatchID, interfaces.ActionEnvelope{
+						ActionID: message.ActionID, MatchID: message.MatchID,
+						Kind: message.Kind, Payload: message.Payload,
+						ClientSequence:       message.ClientSequence,
+						ExpectedStateVersion: message.ExpectedStateVersion,
+					}, time.Duration(message.LatencyMS)*time.Millisecond,
+				)
+				if err != nil {
+					_ = g.write(conn, map[string]any{
+						"type": "error", "code": gameErrorCode(err),
+					})
+					continue
+				}
+				matchID = message.MatchID
+				_ = g.write(conn, map[string]any{
+					"type": "game.action.receipt", "result": result,
+				})
+			case "game.sync.request":
+				result, err := g.service.GameSync(r.Context(), userID, message.MatchID)
+				if err != nil {
+					_ = g.write(conn, map[string]any{
+						"type": "error", "code": "GAME_SYNC_REJECTED",
+					})
+					continue
+				}
+				matchID = message.MatchID
+				_ = g.write(conn, map[string]any{
+					"type": "game.state.sync", "game": result,
+					"serverTime": time.Now().UTC(),
+				})
 			case "ack":
 				if message.AfterSequence > sequence {
 					sequence = message.AfterSequence
@@ -204,6 +251,20 @@ func (g *Gateway) ServeAuthenticated(w http.ResponseWriter, r *http.Request, use
 				return
 			}
 		}
+	}
+}
+
+func gameErrorCode(err error) string {
+	switch {
+	case errors.Is(err, gamesession.ErrActionSequence):
+		return "GAME_SEQUENCE_GAP"
+	case errors.Is(err, gamesession.ErrActionConflict),
+		errors.Is(err, db.ErrRealtimeConflict):
+		return "GAME_STATE_CONFLICT"
+	case errors.Is(err, gamesession.ErrDuplicateMismatch):
+		return "GAME_DUPLICATE_MISMATCH"
+	default:
+		return "GAME_ACTION_REJECTED"
 	}
 }
 

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"skill-arena/internal/db"
+	"skill-arena/internal/games/interfaces"
+	gamesession "skill-arena/internal/games/session"
 	"skill-arena/internal/id"
 	"skill-arena/internal/models"
 )
@@ -39,12 +41,15 @@ type Service struct {
 	reconnectWindow time.Duration
 	maxRatingGap    int
 	maxLatencyMS    int
+	games           *gamesession.Service
 }
 
 func NewService(store *db.Store) *Service {
+	games, _ := gamesession.New(store)
 	service := &Service{
 		store: store, queueTTL: 2 * time.Minute, presenceTTL: 45 * time.Second,
 		reconnectWindow: 30 * time.Second, maxRatingGap: 250, maxLatencyMS: 500,
+		games: games,
 	}
 	if settings := store.RuntimeSettings(); settings != nil {
 		realtime := settings.Realtime
@@ -106,25 +111,7 @@ func (s *Service) Queue(ctx context.Context, userID string, request QueueRequest
 			return nil, nil, errors.New("player is not eligible for live competition")
 		}
 	}
-	module, err := s.store.ArenaRegistry().Get(request.GameID)
-	if err != nil {
-		return nil, nil, err
-	}
-	caps := module.Capabilities()
-	switch request.Mode {
-	case "practice":
-		if !caps.Practice {
-			return nil, nil, ErrUnsupported
-		}
-	case "pvp":
-		if !caps.PvP {
-			return nil, nil, ErrUnsupported
-		}
-	case "tournament":
-		if !caps.Tournament {
-			return nil, nil, ErrUnsupported
-		}
-	default:
+	if !s.supportsMode(request.GameID, request.Mode) {
 		return nil, nil, ErrUnsupported
 	}
 	if existing, err := s.store.RealtimeQueueForUser(ctx, userID); err == nil && existing.Status == models.QueueWaiting && existing.ExpiresAt.After(time.Now().UTC()) {
@@ -273,6 +260,12 @@ func (s *Service) Ready(ctx context.Context, userID, matchID string) (*models.Re
 			return nil, err
 		}
 	}
+	if s.games != nil {
+		if err := s.games.PrepareMatch(ctx, match); err != nil &&
+			!errors.Is(err, gamesession.ErrRuntimeUnavailable) {
+			return nil, err
+		}
+	}
 	match, err = s.transition(ctx, match, models.MatchStarting, "", "match_starting", nil)
 	if err != nil {
 		return nil, err
@@ -281,6 +274,92 @@ func (s *Service) Ready(ctx context.Context, userID, matchID string) (*models.Re
 	match.StartedAt = &now
 	match, err = s.transition(ctx, match, models.MatchLive, "", "match_started", map[string]any{"serverTime": now})
 	return match, err
+}
+
+func (s *Service) GameAction(
+	ctx context.Context,
+	userID, matchID string,
+	envelope interfaces.ActionEnvelope,
+	latency time.Duration,
+) (gamesession.ActionResult, error) {
+	match, _, err := s.participant(ctx, userID, matchID)
+	if err != nil {
+		return gamesession.ActionResult{}, err
+	}
+	if s.games == nil {
+		return gamesession.ActionResult{}, gamesession.ErrRuntimeUnavailable
+	}
+	result, err := s.games.SubmitAction(ctx, match, userID, envelope, latency)
+	if err != nil {
+		return gamesession.ActionResult{}, err
+	}
+	if result.Outcome != nil && result.Outcome.Status == "complete" &&
+		!terminal(match.Status) {
+		completed, transitionErr := s.transition(
+			ctx, match, models.MatchCompleted, userID, "game.match.completed", result.Outcome,
+		)
+		if transitionErr != nil && !errors.Is(transitionErr, ErrInvalidTransition) {
+			return gamesession.ActionResult{}, transitionErr
+		}
+		if transitionErr == nil {
+			_, err = s.store.EnqueueJob(
+				ctx, models.JobRealtimeReplayPersist,
+				map[string]string{"matchId": completed.ID}, time.Now().UTC(),
+			)
+			if err != nil {
+				return gamesession.ActionResult{}, err
+			}
+		}
+	}
+	return result, nil
+}
+
+func (s *Service) GameSync(
+	ctx context.Context,
+	userID, matchID string,
+) (gamesession.SyncResult, error) {
+	match, _, err := s.participant(ctx, userID, matchID)
+	if err != nil {
+		return gamesession.SyncResult{}, err
+	}
+	if s.games == nil {
+		return gamesession.SyncResult{}, gamesession.ErrRuntimeUnavailable
+	}
+	return s.games.Sync(ctx, match, userID, "player")
+}
+
+func (s *Service) ExpireDueGameMatches(ctx context.Context, now time.Time) (int, error) {
+	if s.games == nil {
+		return 0, nil
+	}
+	expired, err := s.games.ExpireDue(ctx, now.UTC())
+	if err != nil {
+		return 0, err
+	}
+	completed := 0
+	for _, item := range expired {
+		match, err := s.store.GetRealtimeMatch(ctx, item.MatchID)
+		if err != nil {
+			return completed, err
+		}
+		if terminal(match.Status) {
+			continue
+		}
+		match, err = s.transition(
+			ctx, match, models.MatchCompleted, "", "game.match.timed_out", item.Outcome,
+		)
+		if err != nil {
+			return completed, err
+		}
+		if _, err := s.store.EnqueueJob(
+			ctx, models.JobRealtimeReplayPersist,
+			map[string]string{"matchId": match.ID}, now.UTC(),
+		); err != nil {
+			return completed, err
+		}
+		completed++
+	}
+	return completed, nil
 }
 
 func (s *Service) Leave(ctx context.Context, userID, matchID string) (*models.RealtimeMatch, error) {
@@ -292,6 +371,11 @@ func (s *Service) Leave(ctx context.Context, userID, matchID string) (*models.Re
 	participant.Status, participant.LeftAt, participant.LastSeenAt = "left", &now, now
 	if err := s.store.SaveRealtimeParticipant(ctx, *participant); err != nil {
 		return nil, err
+	}
+	if s.games != nil {
+		if err := s.games.Forfeit(ctx, match.ID, userID, now); err != nil {
+			return nil, err
+		}
 	}
 	_ = s.setPresence(ctx, userID, models.PresenceOnline, "", "", "", participant.Region)
 	if terminal(match.Status) {
@@ -418,6 +502,37 @@ func (s *Service) FinalizeReplay(ctx context.Context, matchID string) error {
 	if !terminal(match.Status) {
 		return ErrInvalidTransition
 	}
+	if s.games != nil {
+		finalized, finalizeErr := s.games.FinalizeReplay(ctx, match, s)
+		if finalizeErr == nil {
+			replay := models.RealtimeReplay{
+				ID: finalized.ReplayID, MatchID: match.ID, GameID: match.GameID,
+				GameVersion: match.GameVersion, RulesVersion: match.RulesVersion,
+				ProtocolVersion: match.ProtocolVersion, ReplayVersion: match.ReplayVersion,
+				EventCount: finalized.EventCount, EventRootHash: finalized.EventRootHash,
+				Signature: finalized.Proof.Signature, StorageKey: finalized.StorageKey,
+				Status: finalized.Status, CreatedAt: time.Now().UTC(),
+			}
+			if err := s.store.SaveRealtimeReplay(ctx, replay); err != nil {
+				return err
+			}
+			payload, marshalErr := json.Marshal(map[string]any{
+				"replayId": replay.ID, "replayHash": finalized.ReplayHash,
+				"eventRootHash": replay.EventRootHash, "status": replay.Status,
+				"keyId": finalized.Proof.KeyID,
+			})
+			if marshalErr != nil {
+				return marshalErr
+			}
+			_, err = s.store.AppendRealtimeEvent(
+				ctx, match.ID, "", "game.replay.ready", payload,
+			)
+			return err
+		}
+		if !errors.Is(finalizeErr, gamesession.ErrRuntimeUnavailable) {
+			return finalizeErr
+		}
+	}
 	var events []models.RealtimeEvent
 	var after int64
 	for {
@@ -529,6 +644,34 @@ func compatibleJurisdiction(a, b models.RealtimeQueueEntry) bool {
 		return true
 	}
 	return a.Jurisdiction != "" && a.Jurisdiction == b.Jurisdiction
+}
+
+func (s *Service) supportsMode(gameID, mode string) bool {
+	if registry := s.store.GamesRegistry(); registry != nil {
+		if module, err := registry.ResolveForNewMatch(gameID); err == nil {
+			for _, allowed := range module.Descriptor().Modes {
+				if strings.EqualFold(strings.TrimSpace(allowed), mode) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	module, err := s.store.ArenaRegistry().Get(gameID)
+	if err != nil {
+		return false
+	}
+	caps := module.Capabilities()
+	switch mode {
+	case "practice", "tutorial":
+		return caps.Practice
+	case "pvp", "ranked":
+		return caps.PvP
+	case "tournament":
+		return caps.Tournament
+	default:
+		return false
+	}
 }
 
 func abs(value int) int {

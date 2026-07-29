@@ -70,8 +70,13 @@ func (m *Manager) startRealtimeScheduler(ctx context.Context) {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
-			if _, err := m.store.RunRealtimeMaintenance(ctx, time.Now().UTC()); err != nil {
-				m.store.SetWorkerHealth(ctx, WorkerRealtimeMaintenance, "failed", err.Error())
+			now := time.Now().UTC()
+			_, maintenanceErr := m.store.RunRealtimeMaintenance(ctx, now)
+			_, gameErr := realtime.NewService(m.store).ExpireDueGameMatches(ctx, now)
+			if maintenanceErr != nil {
+				m.store.SetWorkerHealth(ctx, WorkerRealtimeMaintenance, "failed", maintenanceErr.Error())
+			} else if gameErr != nil {
+				m.store.SetWorkerHealth(ctx, WorkerRealtimeMaintenance, "failed", gameErr.Error())
 			} else {
 				m.store.SetWorkerHealth(ctx, WorkerRealtimeMaintenance, "running", "")
 			}

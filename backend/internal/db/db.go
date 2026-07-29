@@ -41,76 +41,78 @@ import (
 )
 
 type Store struct {
-	mu                   sync.RWMutex
-	financialGate        sync.Mutex
-	users                map[string]*models.User
-	wallets              map[string]*models.Wallet
-	sessions             map[string]*models.GameSession
-	ledger               map[string][]*models.LedgerEntry
-	devices              map[string][]*models.Device
-	profiles             map[string]*models.Progression
-	awards               map[string][]*models.Achievement
-	auth                 map[string]*models.AuthSession
-	authTokens           map[string]*models.AuthToken
-	mfa                  map[string]*models.MFASettings
-	passwords            map[string][]*models.PasswordHistoryEntry
-	loginSecurity        map[string]*models.LoginSecurityState
-	audit                []*models.AuditLog
-	treasury             *models.TreasuryState
-	season               *models.Season
-	tournaments          map[string]*models.Tournament
-	participants         map[string][]*models.TournamentParticipant
-	tMatches             map[string][]*models.TournamentMatch
-	tSubmissions         map[string][]*models.TournamentSubmission
-	baselines            map[string]*models.BehavioralBaseline
-	telemetry            map[string][]*models.GameplayTelemetry
-	reviewCases          map[string]*models.ReviewCase
-	metrics              *models.MetricsSnapshot
-	jobs                 map[string]*models.BackgroundJob
-	workerHealth         map[string]*models.WorkerHealth
-	backups              []*models.BackupRecord
-	cache                *cache.Cache
-	arenaRegistry        *arenaregistry.Registry
-	gamesRegistry        *gamesregistry.Registry
-	settings             *config.RuntimeSettings
-	pvpMatches           map[string]*models.PvPMatch
-	pvpSubmissions       map[string][]*models.PvPSubmission
-	puzzleRepo           *puzzle.MemoryRepository
-	gamesPuzzleService   *mazegenerator.Service
-	payments             map[string]*models.PaymentProviderSession
-	withdrawals          map[string]*models.WithdrawalRequest
-	amlReviews           map[string]*models.AMLReview
-	playerProfiles       map[string]*models.PlayerProfile
-	notifications        map[string][]*models.Notification
-	supportTickets       map[string][]*models.SupportTicket
-	financialWallets     map[string]*models.FinancialWallet
-	financialDeposits    map[string]*models.FinancialDeposit
-	financialWithdrawals map[string]*models.FinancialWithdrawal
-	financialAssessments map[string]*models.FinancialAssessment
-	financialLimits      map[string]*models.FinancialLimits
-	financialJournal     map[string][]models.FinancialLedgerEntry
-	financialWebhooks    map[string]string
-	financialEvidence    map[string]*models.FinancialEvidence
-	financialArtifacts   map[string]*models.FinancialArtifact
-	payoutDestinations   map[string]*models.FinancialPayoutDestination
-	treasuryChecks       map[string]*models.TreasuryReserveCheck
-	crmInternalNotes     map[string][]models.CRMInternalNote
-	crmRestrictions      map[string][]models.CRMRestriction
-	crmSupportMessages   map[string][]models.CRMSupportMessage
-	crmProviderResponses map[string][]models.CRMComplianceProviderResponse
-	crmJurisdictions     map[string]*models.CRMJurisdictionPolicy
-	crmAnnouncements     map[string]*models.CRMAnnouncement
-	realtimeMatches      map[string]*models.RealtimeMatch
-	realtimeQueue        map[string]*models.RealtimeQueueEntry
-	realtimePresence     map[string]*models.PresenceRecord
-	realtimeEvents       map[string][]models.RealtimeEvent
-	realtimeSnapshots    map[string][]models.RealtimeSnapshot
-	realtimeReplays      map[string]*models.RealtimeReplay
-	dataDir              string
-	persistence          string
-	pg                   *sql.DB
-	redis                saredis.Client
-	objects              storage.ObjectStore
+	mu                    sync.RWMutex
+	financialGate         sync.Mutex
+	users                 map[string]*models.User
+	wallets               map[string]*models.Wallet
+	sessions              map[string]*models.GameSession
+	ledger                map[string][]*models.LedgerEntry
+	devices               map[string][]*models.Device
+	profiles              map[string]*models.Progression
+	awards                map[string][]*models.Achievement
+	auth                  map[string]*models.AuthSession
+	authTokens            map[string]*models.AuthToken
+	mfa                   map[string]*models.MFASettings
+	passwords             map[string][]*models.PasswordHistoryEntry
+	loginSecurity         map[string]*models.LoginSecurityState
+	audit                 []*models.AuditLog
+	treasury              *models.TreasuryState
+	season                *models.Season
+	tournaments           map[string]*models.Tournament
+	participants          map[string][]*models.TournamentParticipant
+	tMatches              map[string][]*models.TournamentMatch
+	tSubmissions          map[string][]*models.TournamentSubmission
+	baselines             map[string]*models.BehavioralBaseline
+	telemetry             map[string][]*models.GameplayTelemetry
+	reviewCases           map[string]*models.ReviewCase
+	metrics               *models.MetricsSnapshot
+	jobs                  map[string]*models.BackgroundJob
+	workerHealth          map[string]*models.WorkerHealth
+	backups               []*models.BackupRecord
+	cache                 *cache.Cache
+	arenaRegistry         *arenaregistry.Registry
+	gamesRegistry         *gamesregistry.Registry
+	settings              *config.RuntimeSettings
+	pvpMatches            map[string]*models.PvPMatch
+	pvpSubmissions        map[string][]*models.PvPSubmission
+	puzzleRepo            *puzzle.MemoryRepository
+	gamesPuzzleService    *mazegenerator.Service
+	payments              map[string]*models.PaymentProviderSession
+	withdrawals           map[string]*models.WithdrawalRequest
+	amlReviews            map[string]*models.AMLReview
+	playerProfiles        map[string]*models.PlayerProfile
+	notifications         map[string][]*models.Notification
+	supportTickets        map[string][]*models.SupportTicket
+	financialWallets      map[string]*models.FinancialWallet
+	financialDeposits     map[string]*models.FinancialDeposit
+	financialWithdrawals  map[string]*models.FinancialWithdrawal
+	financialAssessments  map[string]*models.FinancialAssessment
+	financialLimits       map[string]*models.FinancialLimits
+	financialJournal      map[string][]models.FinancialLedgerEntry
+	financialWebhooks     map[string]string
+	financialEvidence     map[string]*models.FinancialEvidence
+	financialArtifacts    map[string]*models.FinancialArtifact
+	payoutDestinations    map[string]*models.FinancialPayoutDestination
+	treasuryChecks        map[string]*models.TreasuryReserveCheck
+	crmInternalNotes      map[string][]models.CRMInternalNote
+	crmRestrictions       map[string][]models.CRMRestriction
+	crmSupportMessages    map[string][]models.CRMSupportMessage
+	crmProviderResponses  map[string][]models.CRMComplianceProviderResponse
+	crmJurisdictions      map[string]*models.CRMJurisdictionPolicy
+	crmAnnouncements      map[string]*models.CRMAnnouncement
+	realtimeMatches       map[string]*models.RealtimeMatch
+	realtimeQueue         map[string]*models.RealtimeQueueEntry
+	realtimePresence      map[string]*models.PresenceRecord
+	realtimeEvents        map[string][]models.RealtimeEvent
+	realtimeSnapshots     map[string][]models.RealtimeSnapshot
+	realtimeReplays       map[string]*models.RealtimeReplay
+	gameParticipantStates map[string]*models.GameParticipantState
+	gameActionReceipts    map[string]*models.GameActionReceipt
+	dataDir               string
+	persistence           string
+	pg                    *sql.DB
+	redis                 saredis.Client
+	objects               storage.ObjectStore
 }
 
 type Options struct {
@@ -247,72 +249,74 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 	}
 
 	store := &Store{
-		users:                map[string]*models.User{},
-		wallets:              map[string]*models.Wallet{},
-		sessions:             map[string]*models.GameSession{},
-		ledger:               map[string][]*models.LedgerEntry{},
-		devices:              map[string][]*models.Device{},
-		profiles:             map[string]*models.Progression{},
-		awards:               map[string][]*models.Achievement{},
-		auth:                 map[string]*models.AuthSession{},
-		authTokens:           map[string]*models.AuthToken{},
-		mfa:                  map[string]*models.MFASettings{},
-		passwords:            map[string][]*models.PasswordHistoryEntry{},
-		loginSecurity:        map[string]*models.LoginSecurityState{},
-		audit:                []*models.AuditLog{},
-		treasury:             defaultTreasuryState(),
-		season:               defaultSeason(),
-		tournaments:          map[string]*models.Tournament{},
-		participants:         map[string][]*models.TournamentParticipant{},
-		tMatches:             map[string][]*models.TournamentMatch{},
-		tSubmissions:         map[string][]*models.TournamentSubmission{},
-		baselines:            map[string]*models.BehavioralBaseline{},
-		telemetry:            map[string][]*models.GameplayTelemetry{},
-		reviewCases:          map[string]*models.ReviewCase{},
-		metrics:              &models.MetricsSnapshot{},
-		jobs:                 map[string]*models.BackgroundJob{},
-		workerHealth:         map[string]*models.WorkerHealth{},
-		backups:              []*models.BackupRecord{},
-		cache:                cache.New(),
-		arenaRegistry:        arenaModules,
-		gamesRegistry:        gameModules,
-		settings:             config.Runtime(),
-		pvpMatches:           map[string]*models.PvPMatch{},
-		pvpSubmissions:       map[string][]*models.PvPSubmission{},
-		puzzleRepo:           puzzle.NewMemoryRepository(),
-		payments:             map[string]*models.PaymentProviderSession{},
-		withdrawals:          map[string]*models.WithdrawalRequest{},
-		amlReviews:           map[string]*models.AMLReview{},
-		playerProfiles:       map[string]*models.PlayerProfile{},
-		notifications:        map[string][]*models.Notification{},
-		supportTickets:       map[string][]*models.SupportTicket{},
-		financialWallets:     map[string]*models.FinancialWallet{},
-		financialDeposits:    map[string]*models.FinancialDeposit{},
-		financialWithdrawals: map[string]*models.FinancialWithdrawal{},
-		financialAssessments: map[string]*models.FinancialAssessment{},
-		financialLimits:      map[string]*models.FinancialLimits{},
-		financialJournal:     map[string][]models.FinancialLedgerEntry{},
-		financialWebhooks:    map[string]string{},
-		financialEvidence:    map[string]*models.FinancialEvidence{},
-		financialArtifacts:   map[string]*models.FinancialArtifact{},
-		payoutDestinations:   map[string]*models.FinancialPayoutDestination{},
-		treasuryChecks:       map[string]*models.TreasuryReserveCheck{},
-		crmInternalNotes:     map[string][]models.CRMInternalNote{},
-		crmRestrictions:      map[string][]models.CRMRestriction{},
-		crmSupportMessages:   map[string][]models.CRMSupportMessage{},
-		crmProviderResponses: map[string][]models.CRMComplianceProviderResponse{},
-		crmJurisdictions:     map[string]*models.CRMJurisdictionPolicy{},
-		crmAnnouncements:     map[string]*models.CRMAnnouncement{},
-		realtimeMatches:      map[string]*models.RealtimeMatch{},
-		realtimeQueue:        map[string]*models.RealtimeQueueEntry{},
-		realtimePresence:     map[string]*models.PresenceRecord{},
-		realtimeEvents:       map[string][]models.RealtimeEvent{},
-		realtimeSnapshots:    map[string][]models.RealtimeSnapshot{},
-		realtimeReplays:      map[string]*models.RealtimeReplay{},
-		dataDir:              dataDir,
-		persistence:          persistence,
-		redis:                redisClient,
-		objects:              objectStore,
+		users:                 map[string]*models.User{},
+		wallets:               map[string]*models.Wallet{},
+		sessions:              map[string]*models.GameSession{},
+		ledger:                map[string][]*models.LedgerEntry{},
+		devices:               map[string][]*models.Device{},
+		profiles:              map[string]*models.Progression{},
+		awards:                map[string][]*models.Achievement{},
+		auth:                  map[string]*models.AuthSession{},
+		authTokens:            map[string]*models.AuthToken{},
+		mfa:                   map[string]*models.MFASettings{},
+		passwords:             map[string][]*models.PasswordHistoryEntry{},
+		loginSecurity:         map[string]*models.LoginSecurityState{},
+		audit:                 []*models.AuditLog{},
+		treasury:              defaultTreasuryState(),
+		season:                defaultSeason(),
+		tournaments:           map[string]*models.Tournament{},
+		participants:          map[string][]*models.TournamentParticipant{},
+		tMatches:              map[string][]*models.TournamentMatch{},
+		tSubmissions:          map[string][]*models.TournamentSubmission{},
+		baselines:             map[string]*models.BehavioralBaseline{},
+		telemetry:             map[string][]*models.GameplayTelemetry{},
+		reviewCases:           map[string]*models.ReviewCase{},
+		metrics:               &models.MetricsSnapshot{},
+		jobs:                  map[string]*models.BackgroundJob{},
+		workerHealth:          map[string]*models.WorkerHealth{},
+		backups:               []*models.BackupRecord{},
+		cache:                 cache.New(),
+		arenaRegistry:         arenaModules,
+		gamesRegistry:         gameModules,
+		settings:              config.Runtime(),
+		pvpMatches:            map[string]*models.PvPMatch{},
+		pvpSubmissions:        map[string][]*models.PvPSubmission{},
+		puzzleRepo:            puzzle.NewMemoryRepository(),
+		payments:              map[string]*models.PaymentProviderSession{},
+		withdrawals:           map[string]*models.WithdrawalRequest{},
+		amlReviews:            map[string]*models.AMLReview{},
+		playerProfiles:        map[string]*models.PlayerProfile{},
+		notifications:         map[string][]*models.Notification{},
+		supportTickets:        map[string][]*models.SupportTicket{},
+		financialWallets:      map[string]*models.FinancialWallet{},
+		financialDeposits:     map[string]*models.FinancialDeposit{},
+		financialWithdrawals:  map[string]*models.FinancialWithdrawal{},
+		financialAssessments:  map[string]*models.FinancialAssessment{},
+		financialLimits:       map[string]*models.FinancialLimits{},
+		financialJournal:      map[string][]models.FinancialLedgerEntry{},
+		financialWebhooks:     map[string]string{},
+		financialEvidence:     map[string]*models.FinancialEvidence{},
+		financialArtifacts:    map[string]*models.FinancialArtifact{},
+		payoutDestinations:    map[string]*models.FinancialPayoutDestination{},
+		treasuryChecks:        map[string]*models.TreasuryReserveCheck{},
+		crmInternalNotes:      map[string][]models.CRMInternalNote{},
+		crmRestrictions:       map[string][]models.CRMRestriction{},
+		crmSupportMessages:    map[string][]models.CRMSupportMessage{},
+		crmProviderResponses:  map[string][]models.CRMComplianceProviderResponse{},
+		crmJurisdictions:      map[string]*models.CRMJurisdictionPolicy{},
+		crmAnnouncements:      map[string]*models.CRMAnnouncement{},
+		realtimeMatches:       map[string]*models.RealtimeMatch{},
+		realtimeQueue:         map[string]*models.RealtimeQueueEntry{},
+		realtimePresence:      map[string]*models.PresenceRecord{},
+		realtimeEvents:        map[string][]models.RealtimeEvent{},
+		realtimeSnapshots:     map[string][]models.RealtimeSnapshot{},
+		realtimeReplays:       map[string]*models.RealtimeReplay{},
+		gameParticipantStates: map[string]*models.GameParticipantState{},
+		gameActionReceipts:    map[string]*models.GameActionReceipt{},
+		dataDir:               dataDir,
+		persistence:           persistence,
+		redis:                 redisClient,
+		objects:               objectStore,
 	}
 
 	if persistence == "postgres" {
@@ -399,6 +403,27 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 		}
 		return nil, fmt.Errorf("initialize games Puzzle Service: %w", err)
 	}
+	if opts.GamesRegistry == nil {
+		gameModules, err = gamesregistry.NewProduction(gamesregistry.ProductionDependencies{
+			Puzzles: store.gamesPuzzleService,
+			Objects: store.objects,
+		})
+		if err != nil {
+			if store.pg != nil {
+				_ = store.pg.Close()
+			}
+			return nil, fmt.Errorf("initialize runtime games registry: %w", err)
+		}
+		arenaModules, err = gameModules.ArenaRegistry()
+		if err != nil {
+			if store.pg != nil {
+				_ = store.pg.Close()
+			}
+			return nil, fmt.Errorf("initialize runtime Arena Core compatibility registry: %w", err)
+		}
+		store.gamesRegistry = gameModules
+		store.arenaRegistry = arenaModules
+	}
 
 	return store, nil
 }
@@ -447,6 +472,10 @@ func (s *Store) puzzleServiceLocked() *puzzle.Service {
 // It is not an HTTP or realtime gameplay contract.
 func (s *Store) GamesPuzzleService() *mazegenerator.Service {
 	return s.gamesPuzzleService
+}
+
+func (s *Store) GamesObjectStore() storage.ObjectStore {
+	return s.objects
 }
 
 func (s *Store) arenaModuleForSessionLocked(session *models.GameSession) (core.GameModule, error) {
@@ -896,7 +925,10 @@ CREATE INDEX IF NOT EXISTS idx_financial_idempotency_user_operation ON financial
 }
 
 func (s *Store) initPostgresGames(ctx context.Context) error {
-	return s.applyFinancialMigration(ctx, "008_games_puzzle_service", migrations.GamesPuzzleService)
+	if err := s.applyFinancialMigration(ctx, "008_games_puzzle_service", migrations.GamesPuzzleService); err != nil {
+		return err
+	}
+	return s.applyFinancialMigration(ctx, "009_games_runtime", migrations.GamesRuntime)
 }
 
 func (s *Store) loadPostgresSnapshot(ctx context.Context) (bool, error) {
