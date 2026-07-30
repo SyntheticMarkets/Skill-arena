@@ -16,6 +16,7 @@ import (
 	gamesregistry "skill-arena/internal/games/registry"
 	"skill-arena/internal/id"
 	"skill-arena/internal/models"
+	"skill-arena/internal/observability"
 	"skill-arena/migrations"
 )
 
@@ -188,18 +189,29 @@ func (s *Store) TransitionRealtimeMatch(
 		payload = json.RawMessage(`{}`)
 	}
 	if s.pg != nil {
-		tx, err := s.pg.BeginTx(ctx, nil)
+		started := time.Now()
+		conn, err := s.pg.Conn(ctx)
+		observability.ObserveTiming(ctx, "db.realtime_transition.acquire", started)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer conn.Close()
+		started = time.Now()
+		tx, err := conn.BeginTx(ctx, nil)
+		observability.ObserveTiming(ctx, "db.realtime_transition.begin", started)
 		if err != nil {
 			return nil, nil, err
 		}
 		defer tx.Rollback()
 		var sequence int64
 		var previous string
+		started = time.Now()
 		err = tx.QueryRowContext(ctx, `SELECT m.sequence,
 COALESCE((SELECT integrity_hash FROM realtime_events
           WHERE match_id=m.id ORDER BY sequence DESC LIMIT 1),'')
 FROM realtime_matches m WHERE m.id=$1 AND m.state_version=$2 FOR UPDATE`,
 			match.ID, expectedVersion).Scan(&sequence, &previous)
+		observability.ObserveTiming(ctx, "db.realtime_transition.lock", started)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, ErrRealtimeConflict
 		}
@@ -217,6 +229,7 @@ FROM realtime_matches m WHERE m.id=$1 AND m.state_version=$2 FOR UPDATE`,
 			return nil, nil, err
 		}
 		checksum := sha256.Sum256(state)
+		started = time.Now()
 		result, err := tx.ExecContext(ctx, `WITH event_insert AS (
     INSERT INTO realtime_events(
         id,match_id,user_id,type,sequence,state_version,server_time,payload,
@@ -243,6 +256,7 @@ ON CONFLICT(match_id,version) DO NOTHING`,
 			expectedVersion, match.ID, match.StateVersion, match.Sequence, state,
 			hex.EncodeToString(checksum[:]), time.Now().UTC(),
 		)
+		observability.ObserveTiming(ctx, "db.realtime_transition.persist", started)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -250,9 +264,12 @@ ON CONFLICT(match_id,version) DO NOTHING`,
 		if affected != 1 {
 			return nil, nil, ErrRealtimeConflict
 		}
+		started = time.Now()
 		if err := tx.Commit(); err != nil {
+			observability.ObserveTiming(ctx, "db.realtime_transition.commit", started)
 			return nil, nil, err
 		}
+		observability.ObserveTiming(ctx, "db.realtime_transition.commit", started)
 		return cloneRealtimeMatch(&match), &event, nil
 	}
 

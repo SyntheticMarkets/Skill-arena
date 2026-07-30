@@ -126,6 +126,13 @@ type Options struct {
 	PuzzleRepository     mazegenerator.Repository
 }
 
+func (s *Store) DatabaseStats() (sql.DBStats, bool) {
+	if s.pg == nil {
+		return sql.DBStats{}, false
+	}
+	return s.pg.Stats(), true
+}
+
 type storeSnapshot struct {
 	Users          map[string]*models.User                    `json:"users"`
 	Wallets        map[string]*models.Wallet                  `json:"wallets"`

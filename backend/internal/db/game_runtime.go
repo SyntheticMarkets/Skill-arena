@@ -429,7 +429,14 @@ func (s *Store) commitGameActionPostgres(
 	drafts []models.GameEventDraft,
 ) (*models.GameActionReceipt, []models.RealtimeEvent, error) {
 	started := time.Now()
-	tx, err := s.pg.BeginTx(ctx, nil)
+	conn, err := s.pg.Conn(ctx)
+	observability.ObserveTiming(ctx, "db.game_action_commit.acquire", started)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer conn.Close()
+	started = time.Now()
+	tx, err := conn.BeginTx(ctx, nil)
 	observability.ObserveTiming(ctx, "db.game_action_commit.begin", started)
 	if err != nil {
 		return nil, nil, err

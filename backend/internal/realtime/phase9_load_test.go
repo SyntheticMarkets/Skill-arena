@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,6 +48,38 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close(context.Background()) })
+	poolStop := make(chan struct{})
+	poolStopped := make(chan struct{})
+	var poolMaxInUse atomic.Int64
+	go func() {
+		defer close(poolStopped)
+		ticker := time.NewTicker(2 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-poolStop:
+				return
+			case <-ticker.C:
+				if stats, ok := store.DatabaseStats(); ok {
+					for {
+						previous := poolMaxInUse.Load()
+						if int64(stats.InUse) <= previous ||
+							poolMaxInUse.CompareAndSwap(previous, int64(stats.InUse)) {
+							break
+						}
+					}
+				}
+			}
+		}
+	}()
+	defer func() {
+		select {
+		case <-poolStopped:
+		default:
+			close(poolStop)
+			<-poolStopped
+		}
+	}()
 	service := NewService(store)
 
 	firstPlayers := make([]*models.User, matchCount)
@@ -227,6 +260,8 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 	for loadErr := range errs {
 		t.Fatal(loadErr)
 	}
+	close(poolStop)
+	<-poolStopped
 
 	prepP99 := phase9Quantile(preparation, 99)
 	actionP95 := phase9Quantile(actionLatencies, 95)
@@ -245,6 +280,13 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 			"component=%s count=%d p50=%s p95=%s p99=%s",
 			name, timings.count(name), timings.quantile(name, 50),
 			timings.quantile(name, 95), timings.quantile(name, 99),
+		)
+	}
+	if stats, ok := store.DatabaseStats(); ok {
+		t.Logf(
+			"db_pool max_open=%d max_in_use=%d wait_count=%d wait_duration=%s idle=%d",
+			stats.MaxOpenConnections, poolMaxInUse.Load(), stats.WaitCount,
+			stats.WaitDuration, stats.Idle,
 		)
 	}
 	if prepP99 > 5*time.Second {
