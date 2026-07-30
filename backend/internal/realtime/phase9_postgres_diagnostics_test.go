@@ -228,19 +228,20 @@ FROM pg_stat_checkpointer`).Scan(
 	if err != nil {
 		return phase9PostgresStats{}, err
 	}
-	err = d.db.QueryRowContext(ctx, `SELECT
-buffers_clean,buffers_backend,buffers_backend_fsync
-FROM pg_stat_bgwriter`).Scan(
-		&result.cleanBuffers, &result.backendWrites, &result.backendFsyncs,
-	)
+	err = d.db.QueryRowContext(
+		ctx, `SELECT buffers_clean FROM pg_stat_bgwriter`,
+	).Scan(&result.cleanBuffers)
 	if err != nil {
 		return phase9PostgresStats{}, err
 	}
 	err = d.db.QueryRowContext(ctx, `SELECT
 COALESCE(sum(writes),0),COALESCE(sum(write_time),0),
-COALESCE(sum(fsyncs),0),COALESCE(sum(fsync_time),0)
+COALESCE(sum(fsyncs),0),COALESCE(sum(fsync_time),0),
+COALESCE(sum(writes) FILTER (WHERE backend_type='client backend'),0),
+COALESCE(sum(fsyncs) FILTER (WHERE backend_type='client backend'),0)
 FROM pg_stat_io`).Scan(
 		&result.ioWrites, &result.ioWriteMS, &result.ioFsyncs, &result.ioFsyncMS,
+		&result.backendWrites, &result.backendFsyncs,
 	)
 	return result, err
 }
