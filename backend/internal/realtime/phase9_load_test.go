@@ -36,11 +36,10 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 	timings := &phase9TimingRecorder{values: map[string][]time.Duration{}}
 	ctx = observability.WithTimingRecorder(ctx, timings)
 	const matchCount = 100
-	// Leave one PostgreSQL slot for the independent server-wait observer.
-	databasePoolSize := matchCount - 1
+	databasePoolSize := matchCount
 	if configured := os.Getenv("SKILL_ARENA_PHASE9_DATABASE_POOL_SIZE"); configured != "" {
 		parsed, parseErr := strconv.Atoi(configured)
-		if parseErr != nil || parsed < 1 || parsed >= matchCount {
+		if parseErr != nil || parsed < 1 || parsed > matchCount {
 			t.Fatalf("invalid SKILL_ARENA_PHASE9_DATABASE_POOL_SIZE %q", configured)
 		}
 		databasePoolSize = parsed
