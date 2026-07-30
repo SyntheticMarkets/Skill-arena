@@ -7876,6 +7876,19 @@ workflow for:
 - Windows, Linux, and macOS deterministic golden vectors.
 - Complete backend, Player Platform, and Admin CRM regression builds.
 
+Final evidence run:
+
+- Commit: `1aab026fe8155109751ef452f629f76062f78e7b`
+- Workflow run:
+  `https://github.com/SyntheticMarkets/Skill-arena/actions/runs/30516071660`
+- Full regression job: PASS.
+- Windows, Linux, and macOS deterministic-vector jobs: PASS.
+- Linux PostgreSQL, Redis, and MinIO integration: PASS.
+- Linux 100,000-candidate corpus: PASS.
+- Linux native race instrumentation: PASS.
+- Backend, Player Platform, and Admin CRM production image builds: PASS.
+- Linux 100-match latency gate: FAIL.
+
 ##### Qualification And Integrity Evidence
 
 - 100,000 candidates processed.
@@ -7916,9 +7929,18 @@ Measured on the local Windows PostgreSQL environment:
 | Accepted action P99 | `3.801 s` | `< 100 ms` | FAIL |
 | Reconnect P95 | `403.556 ms` | `< 250 ms` | FAIL |
 
-The acceptance targets were not weakened. The identical test is part of the
-Linux production-infrastructure workflow so application cost can be separated
-from local Windows storage and scheduler behavior.
+Measured on the Linux production-infrastructure workflow:
+
+| Operation | Measured | Target | Result |
+|---|---:|---:|---|
+| Match preparation P99 | `1.166 s` | `< 5 s` | PASS |
+| Accepted action P95 | `493.831 ms` | `< 50 ms` | FAIL |
+| Accepted action P99 | `2.745 s` | `< 100 ms` | FAIL |
+| Reconnect P95 | `506.938 ms` | `< 250 ms` | FAIL |
+
+The Linux run completed 100 matches, 200 independent participant states, 3,732
+accepted actions, reconnection, completion, and signed replay persistence
+without an integrity failure. The acceptance targets were not weakened.
 
 ##### Regression And Security Evidence
 
@@ -7932,6 +7954,8 @@ from local Windows storage and scheduler behavior.
 - Admin CRM Playwright: 3 passed.
 - Player Platform and Admin CRM npm dependency audits: zero vulnerabilities.
 - `govulncheck ./...`: zero reachable vulnerabilities.
+- CI now requires Go `1.25.12`; Phase 9 dependency scanning found and removed
+  the previous vulnerable `1.25.0` build pin.
 - Secret-pattern scan: no committed production credential detected.
 - Existing authorization, cross-player action, sequence, stale-state,
   oversized-payload, replay-tamper, signature, and rate-limit regression suites
@@ -7959,6 +7983,7 @@ from local Windows storage and scheduler behavior.
 - `backend/internal/redis/redis.go`
 - `backend/internal/redis/redis_test.go`
 - `docker-compose.yml`
+- `frontend/app/wallet/page.test.tsx`
 
 No database migration or public API/event contract changed.
 
@@ -7976,10 +8001,6 @@ No database migration or public API/event contract changed.
 
 **Medium**
 
-- Cross-platform deterministic vectors and native Linux race instrumentation
-  require the committed GitHub Actions run.
-- Production container builds require the committed Linux workflow run because
-  Docker is unavailable on this workstation.
 - A target-environment rolling restart and multi-instance recovery drill remains
   a Release 1.0 deployment validation.
 
