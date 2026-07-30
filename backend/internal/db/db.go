@@ -1003,8 +1003,13 @@ func (s *Store) initPostgresGames(ctx context.Context) error {
 	if err := s.applyFinancialMigration(ctx, "009_games_runtime", migrations.GamesRuntime); err != nil {
 		return err
 	}
-	return s.applyFinancialMigration(
+	if err := s.applyFinancialMigration(
 		ctx, "010_background_jobs_authoritative", migrations.BackgroundJobsAuthoritative,
+	); err != nil {
+		return err
+	}
+	return s.applyFinancialMigration(
+		ctx, "011_realtime_write_amplification", migrations.RealtimeWriteAmplification,
 	)
 }
 

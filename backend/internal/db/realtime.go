@@ -196,22 +196,15 @@ func (s *Store) TransitionRealtimeMatch(
 			return nil, nil, err
 		}
 		defer conn.Close()
-		started = time.Now()
-		tx, err := conn.BeginTx(ctx, nil)
-		observability.ObserveTiming(ctx, "db.realtime_transition.begin", started)
-		if err != nil {
-			return nil, nil, err
-		}
-		defer tx.Rollback()
 		var sequence int64
 		var previous string
 		started = time.Now()
-		err = tx.QueryRowContext(ctx, `SELECT m.sequence,
+		err = conn.QueryRowContext(ctx, `SELECT m.sequence,
 COALESCE((SELECT integrity_hash FROM realtime_events
           WHERE match_id=m.id ORDER BY sequence DESC LIMIT 1),'')
-FROM realtime_matches m WHERE m.id=$1 AND m.state_version=$2 FOR UPDATE`,
+FROM realtime_matches m WHERE m.id=$1 AND m.state_version=$2`,
 			match.ID, expectedVersion).Scan(&sequence, &previous)
-		observability.ObserveTiming(ctx, "db.realtime_transition.lock", started)
+		observability.ObserveTiming(ctx, "db.realtime_transition.read", started)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, ErrRealtimeConflict
 		}
@@ -230,12 +223,25 @@ FROM realtime_matches m WHERE m.id=$1 AND m.state_version=$2 FOR UPDATE`,
 		}
 		checksum := sha256.Sum256(state)
 		started = time.Now()
-		result, err := tx.ExecContext(ctx, `WITH event_insert AS (
+		result, err := conn.ExecContext(ctx, `WITH transition_guard AS MATERIALIZED (
+    SELECT 1
+    FROM realtime_matches AS guarded_match
+    WHERE guarded_match.id=$17
+      AND guarded_match.state_version=$18
+      AND guarded_match.sequence=$25
+      AND COALESCE((
+          SELECT integrity_hash FROM realtime_events
+          WHERE match_id=guarded_match.id
+          ORDER BY sequence DESC LIMIT 1
+      ),'')=$26
+    FOR UPDATE OF guarded_match
+), event_insert AS (
     INSERT INTO realtime_events(
         id,match_id,user_id,type,sequence,state_version,server_time,payload,
         previous_hash,integrity_hash
     )
-    VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10)
+    SELECT $1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10
+    FROM transition_guard
     RETURNING 1
 ), match_update AS (
     UPDATE realtime_matches SET
@@ -254,7 +260,7 @@ ON CONFLICT(match_id,version) DO NOTHING`,
 			event.IntegrityHash, match.Status, match.StateVersion, match.Sequence,
 			match.UpdatedAt, match.StartedAt, match.CompletedAt, match.ID,
 			expectedVersion, match.ID, match.StateVersion, match.Sequence, state,
-			hex.EncodeToString(checksum[:]), time.Now().UTC(),
+			hex.EncodeToString(checksum[:]), time.Now().UTC(), sequence, previous,
 		)
 		observability.ObserveTiming(ctx, "db.realtime_transition.persist", started)
 		if err != nil {
@@ -264,12 +270,6 @@ ON CONFLICT(match_id,version) DO NOTHING`,
 		if affected != 1 {
 			return nil, nil, ErrRealtimeConflict
 		}
-		started = time.Now()
-		if err := tx.Commit(); err != nil {
-			observability.ObserveTiming(ctx, "db.realtime_transition.commit", started)
-			return nil, nil, err
-		}
-		observability.ObserveTiming(ctx, "db.realtime_transition.commit", started)
 		return cloneRealtimeMatch(&match), &event, nil
 	}
 

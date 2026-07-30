@@ -36,3 +36,8 @@ var GamesRuntime string
 //
 //go:embed 010_background_jobs_authoritative.sql
 var BackgroundJobsAuthoritative string
+
+// RealtimeWriteAmplification removes redundant indexes from the action path.
+//
+//go:embed 011_realtime_write_amplification.sql
+var RealtimeWriteAmplification string

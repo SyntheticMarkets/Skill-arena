@@ -27,6 +27,20 @@ func TestPostgresGameRuntimeAtomicStateReceiptAndEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close(context.Background()) })
+	var activeIndex, redundantEventIndex, redundantReceiptIndex *string
+	if err := store.pg.QueryRowContext(ctx, `SELECT
+to_regclass('idx_game_participant_states_user')::text,
+to_regclass('realtime_events_stream_idx')::text,
+to_regclass('idx_game_action_receipts_participant_sequence')::text`).
+		Scan(&activeIndex, &redundantEventIndex, &redundantReceiptIndex); err != nil {
+		t.Fatal(err)
+	}
+	if activeIndex == nil || redundantEventIndex != nil || redundantReceiptIndex != nil {
+		t.Fatalf(
+			"realtime indexes active=%v redundant_event=%v redundant_receipt=%v",
+			activeIndex, redundantEventIndex, redundantReceiptIndex,
+		)
+	}
 	if _, err := store.pg.ExecContext(ctx, `TRUNCATE
 game_action_receipts,game_participant_states,realtime_replays,realtime_snapshots,
 realtime_events,realtime_presence,realtime_queue,realtime_participants,
