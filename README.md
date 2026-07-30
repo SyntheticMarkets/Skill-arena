@@ -7963,6 +7963,7 @@ without an integrity failure. The acceptance targets were not weakened.
 
 ##### Files Changed
 
+- `README.md`
 - `.github/workflows/sprint-6-phase-9.yml`
 - `backend/cmd/api/main.go`
 - `backend/go.mod`
