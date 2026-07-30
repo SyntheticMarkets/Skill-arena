@@ -64,7 +64,9 @@ jobs:
           test -n "$postgres_id"
           docker exec "$postgres_id" \
             psql -U skillarena -d skillarena_phase9 \
-            -c "ALTER SYSTEM SET max_connections = 150"
+            -c "ALTER SYSTEM SET max_connections = 150" \
+            -c "ALTER SYSTEM SET track_io_timing = on" \
+            -c "ALTER SYSTEM SET track_wal_io_timing = on"
           docker restart "$postgres_id"
           for attempt in $(seq 1 30); do
             if PGPASSWORD=phase9-postgres-ci \
@@ -75,6 +77,14 @@ jobs:
           done
           docker logs "$postgres_id"
           exit 1
+      - name: Measure validation storage durability
+        run: |
+          postgres_id="$(docker ps --filter ancestor=postgres:17-alpine --format '{{.ID}}' | head -n 1)"
+          test -n "$postgres_id"
+          docker exec --user postgres "$postgres_id" sh -c \
+            'pg_test_fsync -f "$PGDATA/phase9-fsync-test"'
+          docker exec --user postgres "$postgres_id" sh -c \
+            'rm -f "$PGDATA/phase9-fsync-test"'
       - name: Start pinned S3-compatible storage
         run: |
           docker run -d --name phase9-minio \

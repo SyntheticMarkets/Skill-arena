@@ -317,12 +317,18 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 		t.Log(line)
 	}
 	t.Logf(
-		"pg_stats transactions=%d blocks_read=%d blocks_hit=%d temp_files=%d temp_bytes=%d deadlocks=%d block_read_ms=%.3f block_write_ms=%.3f wal_records=%d wal_bytes=%d wal_writes=%d wal_syncs=%d wal_write_ms=%.3f wal_sync_ms=%.3f",
+		"pg_stats transactions=%d blocks_read=%d blocks_hit=%d temp_files=%d temp_bytes=%d deadlocks=%d block_read_ms=%.3f block_write_ms=%.3f wal_records=%d wal_fpi=%d wal_bytes=%d wal_writes=%d wal_syncs=%d wal_buffers_full=%d wal_write_ms=%.3f wal_sync_ms=%.3f checkpoints=%d checkpoint_write_ms=%.3f checkpoint_sync_ms=%.3f checkpoint_buffers=%d clean_buffers=%d backend_writes=%d backend_fsyncs=%d io_writes=%d io_write_ms=%.3f io_fsyncs=%d io_fsync_ms=%.3f",
 		postgresStats.transactions, postgresStats.blocksRead, postgresStats.blocksHit,
 		postgresStats.tempFiles, postgresStats.tempBytes, postgresStats.deadlocks,
 		postgresStats.blockReadMS, postgresStats.blockWriteMS,
-		postgresStats.walRecords, postgresStats.walBytes, postgresStats.walWrites,
-		postgresStats.walSyncs, postgresStats.walWriteMS, postgresStats.walSyncMS,
+		postgresStats.walRecords, postgresStats.walFPI, postgresStats.walBytes,
+		postgresStats.walWrites, postgresStats.walSyncs, postgresStats.walBuffersFull,
+		postgresStats.walWriteMS, postgresStats.walSyncMS,
+		postgresStats.checkpoints, postgresStats.checkpointWriteMS,
+		postgresStats.checkpointSyncMS, postgresStats.checkpointBuffers,
+		postgresStats.cleanBuffers, postgresStats.backendWrites,
+		postgresStats.backendFsyncs, postgresStats.ioWrites,
+		postgresStats.ioWriteMS, postgresStats.ioFsyncs, postgresStats.ioFsyncMS,
 	)
 	if prepP99 > 5*time.Second {
 		t.Fatalf("match preparation p99 %s exceeds 5s", prepP99)
