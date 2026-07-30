@@ -59,7 +59,7 @@ Do not create frontend placeholders that depend on unfinished backend work. Do n
 
 ### Release 1.0 Architecture
 
-Status: **Sprints 1-5 complete and frozen. Sprint 6 Implementation Phases 1 through 8 are complete and validated; Phase 9 has not started.**
+Status: **Sprints 1-5 complete and frozen. Sprint 6 Implementation Phases 1 through 8 are complete and validated; Phase 9 is in progress with changes required.**
 
 Release 1.0 is organized as independently owned product domains. A frozen domain may receive bug fixes, security fixes, performance work, scalability work, or integration support, but its business contract may not be silently redesigned by a later sprint.
 
@@ -7987,6 +7987,84 @@ without an integrity failure. The acceptance targets were not weakened.
 - `frontend/app/wallet/page.test.tsx`
 
 No database migration or public API/event contract changed.
+
+##### Sprint 6.1 Performance Remediation
+
+Remediation date: 2026-07-30
+
+Decision: **CHANGES REQUIRED**
+
+The first focused remediation pass improved persistence concurrency and removed
+avoidable network work without changing gameplay, public APIs, Realtime event
+contracts, or the documented performance targets:
+
+- Replaced the legacy PostgreSQL driver with the pgx standard-library adapter
+  while retaining the existing `database/sql` repository contracts.
+- Warmed the PostgreSQL pool and raised production Redis pool capacity.
+- Combined Realtime action reads and reduced action-path database queries.
+- Replaced per-action Redis lock round trips with PostgreSQL match-row
+  serialization inside the authoritative action transaction.
+- Batched event persistence and kept participant state, action receipt, and
+  stream-head updates atomic.
+- Replaced whole-store snapshot writes for background jobs with normalized,
+  row-level PostgreSQL queue operations using `FOR UPDATE SKIP LOCKED`.
+- Added migration `010_background_jobs_authoritative.sql` and restart,
+  claim, retry, failure, cancellation, and completion integration coverage.
+- Updated `golang.org/x/text` to remove `GO-2026-5970`; `govulncheck` reports
+  zero reachable vulnerabilities.
+- Split ordinary-action and completion-action latency in the load report so
+  persistence bottlenecks remain visible.
+
+Implementation commits:
+
+- `f23512d` - Remediate Sprint 6 realtime latency paths.
+- `c98e4ef` - Harden realtime persistence under load.
+
+Final remediation evidence run:
+
+- Commit: `c98e4efce230f0e9ddea8f581e3488c0716d170c`.
+- Workflow run:
+  `https://github.com/SyntheticMarkets/Skill-arena/actions/runs/30566940789`.
+- Full backend, Player Platform, and Admin CRM regression job: PASS.
+- Windows, Linux, and macOS deterministic-vector jobs: PASS.
+- Linux PostgreSQL, Redis, and MinIO integration: PASS.
+- Linux 100,000-candidate qualification corpus: PASS.
+- Linux native race instrumentation: PASS.
+- Backend, Player Platform, and Admin CRM production image builds: PASS.
+- Linux 100-match latency gate: FAIL.
+
+Latest Linux production-infrastructure measurements:
+
+| Operation | Measured | Target | Result |
+|---|---:|---:|---|
+| Match preparation P99 | `1.248 s` | `< 5 s` | PASS |
+| Accepted action P95 | `398.635 ms` | `< 50 ms` | FAIL |
+| Accepted action P99 | `883.209 ms` | `< 100 ms` | FAIL |
+| Ordinary action P95 | `326.978 ms` | diagnostic | NOT A GATE |
+| Ordinary action P99 | `540.193 ms` | diagnostic | NOT A GATE |
+| Completion action P95 | `1.503 s` | diagnostic | NOT A GATE |
+| Reconnect P95 | `461.265 ms` | `< 250 ms` | FAIL |
+
+The run completed 100 simultaneous matches and 3,790 accepted authoritative
+actions. Compared with the preceding Linux run, accepted-action P95 improved
+from `493.831 ms` to `398.635 ms`, accepted-action P99 improved from `2.745 s`
+to `883.209 ms`, and reconnect P95 improved from `506.938 ms` to `461.265 ms`.
+The required thresholds remain unchanged and are not met.
+
+Verification after remediation:
+
+- `go test ./... -count=1`: PASS.
+- `go vet ./...`: PASS.
+- `go build ./...`: PASS.
+- `go mod verify`: PASS.
+- PostgreSQL background-job lifecycle integration: PASS.
+- PostgreSQL atomic action state, receipt, and event integration: PASS.
+- Player Platform regression and production build: PASS.
+- Admin CRM regression and production build: PASS.
+- Player Platform and Admin CRM dependency audits: zero vulnerabilities.
+- `govulncheck ./...`: zero reachable vulnerabilities.
+
+No Sprint 6 freeze tag was created.
 
 ##### Remaining Freeze Gates
 
