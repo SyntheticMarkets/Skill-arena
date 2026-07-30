@@ -8066,6 +8066,88 @@ Verification after remediation:
 
 No Sprint 6 freeze tag was created.
 
+###### Authoritative Persistence Remediation Pass 2
+
+Remediation date: 2026-07-30
+
+Decision: **CHANGES REQUIRED**
+
+The second focused pass profiled the action and reconnect pipelines before
+changing them, then removed repeated durable reads while preserving synchronous
+PostgreSQL authority:
+
+- Added low-overhead component timing for action loading, computation,
+  persistence, post-commit work, and reconnect stages.
+- Added process-local lock-free caches for committed participant state and match
+  stream heads. Durable-state conflicts reload from PostgreSQL and retry
+  fail-closed; terminal lifecycle transitions evict cached state.
+- Combined action event insertion, stream-head compare-and-swap, participant
+  state update, and idempotency receipt creation into one PostgreSQL statement
+  within one transaction.
+- Replaced the multi-transaction Realtime lifecycle path with one atomic
+  PostgreSQL transition that commits match state, event, and snapshot together.
+- Added stale-cache, idempotency, lifecycle, and PostgreSQL atomicity regression
+  coverage.
+- Kept the 100-match concurrency level and every documented latency threshold
+  unchanged.
+
+Implementation commit:
+
+- `8ac8db3` - Optimize authoritative realtime persistence.
+
+Validation evidence:
+
+- Commit: `8ac8db3c51c8784f72cce2f11c48a375618f43bb`.
+- Workflow run:
+  `https://github.com/SyntheticMarkets/Skill-arena/actions/runs/30572699157`.
+- Full backend, Player Platform, and Admin CRM regression job: PASS.
+- Windows, Linux, and macOS deterministic-vector jobs: PASS.
+- Linux PostgreSQL, Redis, and MinIO integration: PASS.
+- Linux 100,000-candidate qualification corpus: PASS.
+- Linux native race instrumentation: PASS.
+- Backend, Player Platform, and Admin CRM production image builds: PASS.
+- Linux 100-match latency gate: FAIL.
+
+Latest Linux production-infrastructure measurements:
+
+| Operation | Measured | Target | Result |
+|---|---:|---:|---|
+| Match preparation P99 | `1.141 s` | `< 5 s` | PASS |
+| Accepted action P95 | `296.067 ms` | `< 50 ms` | FAIL |
+| Accepted action P99 | `664.450 ms` | `< 100 ms` | FAIL |
+| Ordinary action P95 | `235.466 ms` | diagnostic | NOT A GATE |
+| Ordinary action P99 | `441.036 ms` | diagnostic | NOT A GATE |
+| Completion action P95 | `1.076 s` | diagnostic | NOT A GATE |
+| Reconnect P95 | `317.472 ms` | `< 250 ms` | FAIL |
+
+The run completed 100 simultaneous matches and 3,768 accepted authoritative
+actions without an integrity failure. Compared with the preceding Linux run,
+accepted-action P95 improved from `398.635 ms` to `296.067 ms`,
+accepted-action P99 improved from `883.209 ms` to `664.450 ms`, and reconnect
+P95 improved from `461.265 ms` to `317.472 ms`. The thresholds remain
+unchanged and are still not met.
+
+Component attribution confirms that repeated participant-state loading is no
+longer the bottleneck:
+
+| Component | P95 | P99 |
+|---|---:|---:|
+| Action state load | `5.289 us` | `10.880 us` |
+| Action computation | `22.666 ms` | `74.823 ms` |
+| PostgreSQL transaction begin | `64.384 ms` | `119.427 ms` |
+| PostgreSQL atomic persistence | `112.847 ms` | `182.397 ms` |
+| PostgreSQL transaction commit | `86.328 ms` | `159.773 ms` |
+| Total durable action commit | `214.999 ms` | `377.212 ms` |
+| Reconnect atomic transition | `173.455 ms` | `621.079 ms` |
+
+The remaining tail is concentrated in synchronous PostgreSQL transaction
+acquisition, atomic persistence, and commit under sustained concurrency.
+Durability was not weakened, persistence was not moved behind an asynchronous
+acknowledgement, puzzle complexity was not reduced, and the load gate was not
+throttled to manufacture a passing result.
+
+No Sprint 6 freeze tag was created.
+
 ##### Remaining Freeze Gates
 
 **High**
