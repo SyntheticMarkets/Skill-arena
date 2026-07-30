@@ -137,6 +137,7 @@ func TestConcurrentQueueDoesNotPairPlayerTwice(t *testing.T) {
 	for err := range errs {
 		t.Error(err)
 	}
+	matchedPlayers := 0
 	for _, user := range users {
 		entry, err := service.QueueStatus(ctx, user.ID)
 		if err != nil {
@@ -152,6 +153,12 @@ func TestConcurrentQueueDoesNotPairPlayerTwice(t *testing.T) {
 		if count > 1 {
 			t.Fatalf("player %s was paired into %d matches", user.ID, count)
 		}
+		if count == 1 {
+			matchedPlayers++
+		}
+	}
+	if matchedPlayers != len(users) {
+		t.Fatalf("matched players=%d, want %d", matchedPlayers, len(users))
 	}
 }
 

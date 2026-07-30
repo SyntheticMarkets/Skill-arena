@@ -60,6 +60,9 @@ TRUNCATE notification_events,player_notifications,support_tickets,player_profile
 	if _, err := store.GetHubProgression(ctx, user.ID); err != nil {
 		t.Fatalf("create progression: %v", err)
 	}
+	if progression, err := store.GetProgressionByUserID(ctx, user.ID); err != nil || progression.UserID != user.ID {
+		t.Fatalf("generic progression repository=%+v err=%v", progression, err)
+	}
 	notification := &models.Notification{
 		UserID: user.ID, Category: "security", Title: "Session protected",
 		Message: "Your current session passed the security check.",

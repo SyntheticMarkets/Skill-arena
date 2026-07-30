@@ -83,3 +83,42 @@ func TestPostgresAuthenticationRepository(t *testing.T) {
 		t.Fatalf("audit hash chain missing: logs=%d err=%v", len(logs), err)
 	}
 }
+
+func TestPostgresRestartIgnoresStaleSnapshotUserWithMatchingEmail(t *testing.T) {
+	databaseURL := os.Getenv("SKILL_ARENA_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("SKILL_ARENA_TEST_POSTGRES_URL is not configured")
+	}
+	ctx := context.Background()
+	first, err := NewWithOptions(ctx, Options{
+		DatabaseURL: databaseURL, Environment: "development",
+		Storage: config.StorageSettings{LocalRoot: t.TempDir()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminEmail := config.Runtime().Admin.SuperAdminEmails[0]
+	if _, err := first.pg.ExecContext(ctx, `DELETE FROM users WHERE LOWER(email)=LOWER($1)`, adminEmail); err != nil {
+		t.Fatal(err)
+	}
+	replacement := models.NewUser("normalized-admin", adminEmail, "hash")
+	if err := first.CreateUser(ctx, replacement); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := NewWithOptions(ctx, Options{
+		DatabaseURL: databaseURL, Environment: "development",
+		Storage: config.StorageSettings{LocalRoot: t.TempDir()},
+	})
+	if err != nil {
+		t.Fatalf("restart with normalized identity and stale snapshot: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Close(context.Background()) })
+	loaded, err := second.GetUserByEmail(ctx, adminEmail)
+	if err != nil || loaded.ID != replacement.ID {
+		t.Fatalf("loaded=%+v err=%v", loaded, err)
+	}
+}

@@ -1,18 +1,16 @@
 package redis
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"fmt"
-	"net"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	goredis "github.com/redis/go-redis/v9"
 )
 
 type Client interface {
@@ -154,24 +152,52 @@ type NetworkClient struct {
 	URL string
 }
 
+var networkClients sync.Map
+
+func (c NetworkClient) client() (*goredis.Client, error) {
+	if strings.TrimSpace(c.URL) == "" {
+		return nil, errors.New("redis url is required")
+	}
+	if existing, ok := networkClients.Load(c.URL); ok {
+		return existing.(*goredis.Client), nil
+	}
+	options, err := goredis.ParseURL(c.URL)
+	if err != nil {
+		return nil, err
+	}
+	client := goredis.NewClient(options)
+	existing, loaded := networkClients.LoadOrStore(c.URL, client)
+	if loaded {
+		_ = client.Close()
+		return existing.(*goredis.Client), nil
+	}
+	return client, nil
+}
+
 func (c NetworkClient) Health(ctx context.Context) error {
-	_, err := c.command(ctx, "PING")
-	return err
+	client, err := c.client()
+	if err != nil {
+		return err
+	}
+	return client.Ping(ctx).Err()
 }
 
 func (c NetworkClient) Set(ctx context.Context, key, value string, ttl time.Duration) error {
-	args := []string{"SET", key, value}
-	if ttl > 0 {
-		args = append(args, "PX", strconv.FormatInt(ttl.Milliseconds(), 10))
+	client, err := c.client()
+	if err != nil {
+		return err
 	}
-	_, err := c.command(ctx, args...)
-	return err
+	return client.Set(ctx, key, value, ttl).Err()
 }
 
 func (c NetworkClient) Get(ctx context.Context, key string) (string, bool, error) {
-	value, err := c.command(ctx, "GET", key)
+	client, err := c.client()
 	if err != nil {
-		if errors.Is(err, errNil) {
+		return "", false, err
+	}
+	value, err := client.Get(ctx, key).Result()
+	if err != nil {
+		if errors.Is(err, goredis.Nil) {
 			return "", false, nil
 		}
 		return "", false, err
@@ -180,8 +206,11 @@ func (c NetworkClient) Get(ctx context.Context, key string) (string, bool, error
 }
 
 func (c NetworkClient) Del(ctx context.Context, key string) error {
-	_, err := c.command(ctx, "DEL", key)
-	return err
+	client, err := c.client()
+	if err != nil {
+		return err
+	}
+	return client.Del(ctx, key).Err()
 }
 
 func (c NetworkClient) Lock(ctx context.Context, key string, ttl time.Duration) (string, bool, error) {
@@ -192,23 +221,25 @@ func (c NetworkClient) Lock(ctx context.Context, key string, ttl time.Duration) 
 	if err != nil {
 		return "", false, err
 	}
-	value, err := c.command(ctx, "SET", "lock:"+key, token, "NX", "PX", strconv.FormatInt(ttl.Milliseconds(), 10))
+	client, err := c.client()
 	if err != nil {
-		if errors.Is(err, errNil) {
-			return "", false, nil
-		}
 		return "", false, err
 	}
-	return token, strings.EqualFold(value, "OK"), nil
+	acquired, err := client.SetNX(ctx, "lock:"+key, token, ttl).Result()
+	return token, acquired, err
 }
 
 func (c NetworkClient) Unlock(ctx context.Context, key, token string) error {
 	const script = `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end`
-	value, err := c.command(ctx, "EVAL", script, "1", "lock:"+key, token)
+	client, err := c.client()
 	if err != nil {
 		return err
 	}
-	if value != "1" {
+	value, err := client.Eval(ctx, script, []string{"lock:" + key}, token).Int64()
+	if err != nil {
+		return err
+	}
+	if value != 1 {
 		return errors.New("lock is not owned by token")
 	}
 	return nil
@@ -227,100 +258,15 @@ func (c NetworkClient) Allow(ctx context.Context, key string, limit int, window 
 		return false, errors.New("rate limit and window must be positive")
 	}
 	const script = `local count = redis.call('INCR', KEYS[1]); if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]); end; return count`
-	value, err := c.command(ctx, "EVAL", script, "1", key, strconv.FormatInt(window.Milliseconds(), 10))
+	client, err := c.client()
 	if err != nil {
 		return false, err
 	}
-	count, err := strconv.Atoi(value)
+	count, err := client.Eval(
+		ctx, script, []string{key}, strconv.FormatInt(window.Milliseconds(), 10),
+	).Int64()
 	if err != nil {
 		return false, err
 	}
-	return count <= limit, nil
-}
-
-var errNil = errors.New("redis nil")
-
-func (c NetworkClient) command(ctx context.Context, args ...string) (string, error) {
-	if c.URL == "" {
-		return "", errors.New("redis url is required")
-	}
-	parsed, err := url.Parse(c.URL)
-	if err != nil {
-		return "", err
-	}
-	addr := parsed.Host
-	if !strings.Contains(addr, ":") {
-		addr += ":6379"
-	}
-	dialer := net.Dialer{Timeout: 5 * time.Second}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return "", err
-	}
-	defer conn.Close()
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
-	} else {
-		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	}
-	if parsed.User != nil {
-		password, _ := parsed.User.Password()
-		if password != "" {
-			if _, err := writeRESP(conn, "AUTH", password); err != nil {
-				return "", err
-			}
-			if _, err := readRESP(bufio.NewReader(conn)); err != nil {
-				return "", err
-			}
-		}
-	}
-	if _, err := writeRESP(conn, args...); err != nil {
-		return "", err
-	}
-	return readRESP(bufio.NewReader(conn))
-}
-
-func writeRESP(conn net.Conn, args ...string) (int, error) {
-	var b strings.Builder
-	b.WriteString("*" + strconv.Itoa(len(args)) + "\r\n")
-	for _, arg := range args {
-		b.WriteString("$" + strconv.Itoa(len(arg)) + "\r\n")
-		b.WriteString(arg + "\r\n")
-	}
-	return conn.Write([]byte(b.String()))
-}
-
-func readRESP(r *bufio.Reader) (string, error) {
-	prefix, err := r.ReadByte()
-	if err != nil {
-		return "", err
-	}
-	line, err := r.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-	switch prefix {
-	case '+':
-		return line, nil
-	case '-':
-		return "", errors.New(line)
-	case ':':
-		return line, nil
-	case '$':
-		n, err := strconv.Atoi(line)
-		if err != nil {
-			return "", err
-		}
-		if n < 0 {
-			return "", errNil
-		}
-		buf := make([]byte, n+2)
-		if _, err := r.Read(buf); err != nil {
-			return "", err
-		}
-		return string(buf[:n]), nil
-	default:
-		return "", fmt.Errorf("unsupported redis response prefix %q", prefix)
-	}
+	return count <= int64(limit), nil
 }

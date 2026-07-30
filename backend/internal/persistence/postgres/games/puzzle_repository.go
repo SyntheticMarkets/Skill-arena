@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	mazegenerator "skill-arena/internal/games/maze/generator"
 
@@ -198,7 +199,27 @@ FROM game_difficulty_analyses WHERE analysis_id=$1`, id).Scan(
 }
 
 func (r *PuzzleRepository) FinalizeAndAssign(ctx context.Context, final mazegenerator.Finalization) (mazegenerator.Assignment, error) {
-	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	const maximumAttempts = 5
+	var lastErr error
+	for attempt := range maximumAttempts {
+		assignment, err := r.finalizeAndAssignOnce(ctx, final)
+		if err == nil || !retryableTransactionError(err) {
+			return assignment, err
+		}
+		lastErr = err
+		timer := time.NewTimer(time.Duration(attempt+1) * 5 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return mazegenerator.Assignment{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return mazegenerator.Assignment{}, lastErr
+}
+
+func (r *PuzzleRepository) finalizeAndAssignOnce(ctx context.Context, final mazegenerator.Finalization) (mazegenerator.Assignment, error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return mazegenerator.Assignment{}, err
 	}
@@ -272,6 +293,11 @@ WHERE puzzle_id=$1 AND status='preparing'`,
 		return mazegenerator.Assignment{}, translateError(err)
 	}
 	return final.Assignment, nil
+}
+
+func retryableTransactionError(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && (pqErr.Code == "40001" || pqErr.Code == "40P01")
 }
 
 func (r *PuzzleRepository) GetAssignment(ctx context.Context, scopeType, scopeID string) (mazegenerator.Assignment, error) {

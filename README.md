@@ -7817,8 +7817,196 @@ Sprint 6 Implementation Phase 7 validation decision is **APPROVED**.
 
 Sprint 6 Implementation Phase 8 validation decision is **APPROVED**.
 
-Implementation Phase 9 remains **NOT STARTED** and requires explicit
-product-owner authorization.
+Sprint 6 Implementation Phase 9 is **IN PROGRESS - CHANGES REQUIRED**.
+
+#### Sprint 6 Implementation Phase 9 Validation Report
+
+Validation date: 2026-07-30
+
+Decision: **CHANGES REQUIRED**
+
+Phase 9 remains production hardening only. No new gameplay rule, product
+feature, client authority, payment behavior, or frozen Sprint 1 through Sprint
+5 public contract was introduced.
+
+##### Summary
+
+Production-backed testing exposed and corrected defects that development
+adapters did not reveal:
+
+- PostgreSQL legacy identity migration could retain a stale snapshot user whose
+  normalized email belonged to another durable user.
+- PostgreSQL audit timestamps could be normalized differently before storage
+  and hash verification.
+- PostgreSQL-backed users could fail Realtime progression lookup after restart.
+- Burst matchmaking calls could leave valid queue entries waiting indefinitely
+  after losing the distributed lock race.
+- Concurrent puzzle finalization could suffer avoidable serializable
+  transaction conflicts for unrelated puzzle rows.
+- The Redis transport opened one TCP connection per command and exhausted
+  ephemeral ports under representative live-match load.
+- PostgreSQL connection-pool limits were fixed constants rather than production
+  configuration.
+
+The corrections remain generic production reliability work. Maze rules,
+generator output, solver behavior, replay format, public REST contracts, and
+Realtime event contracts are unchanged.
+
+##### Production Infrastructure Evidence
+
+Validated locally against isolated production-compatible services:
+
+- PostgreSQL 17 on `127.0.0.1:55433`.
+- Redis-compatible 8.8 service on `127.0.0.1:56379`.
+- MinIO S3-compatible object storage on `127.0.0.1:59000`.
+- Full PostgreSQL repository integration suites passed.
+- Redis network integration passed using the pooled production client.
+- S3 lifecycle, signing, persistence, and retrieval integration passed.
+- PostgreSQL, Redis, and object-storage outage tests failed closed and passed
+  after dependency recovery.
+
+The repository now includes a manually dispatched GitHub Actions validation
+workflow for:
+
+- Linux PostgreSQL, Redis, and MinIO integration.
+- Linux native race instrumentation.
+- Linux production container builds.
+- Linux 100-match production-backed load validation.
+- Linux 100,000-candidate qualification.
+- Windows, Linux, and macOS deterministic golden vectors.
+- Complete backend, Player Platform, and Admin CRM regression builds.
+
+##### Qualification And Integrity Evidence
+
+- 100,000 candidates processed.
+- 92,161 candidates accepted by generation and independent solver validation.
+- 6,250 unique assignments selected.
+- Zero accepted invalid puzzle.
+- Zero duplicate one-use assignment.
+- Candidate latency: P50 `19.886 ms`, P95 `38.228 ms`, P99 `53.006 ms`.
+- Rejection reasons were recorded rather than weakened:
+  `dependency_depth_mismatch=494`, `false_routes_mismatch=171`,
+  `placement_exhausted=7,174`.
+- Solver and replay golden vectors are stable locally and are included in the
+  cross-platform workflow.
+- Backup archive size: `3,960,941` bytes.
+- Backup SHA-256:
+  `d490f9ec53a5ed8a768f71e8cd18ffed1e94f661bd61fd6c57f9857d5dd592c9`.
+- Source and restored puzzle, action-receipt, and replay-signature aggregates
+  matched exactly.
+
+##### Load Evidence
+
+The production-backed load test completed:
+
+- 100 simultaneous shared-puzzle PvP matches.
+- 200 independent participant states.
+- 3,770 accepted authoritative actions.
+- Reconnection and snapshot recovery.
+- Match completion and signed replay persistence.
+- No duplicate pairing, lost accepted action, divergent shared puzzle, or
+  replay-integrity failure.
+
+Measured on the local Windows PostgreSQL environment:
+
+| Operation | Measured | Target | Result |
+|---|---:|---:|---|
+| Match preparation P99 | `1.651 s` | `< 5 s` | PASS |
+| Accepted action P95 | `832.817 ms` | `< 50 ms` | FAIL |
+| Accepted action P99 | `3.801 s` | `< 100 ms` | FAIL |
+| Reconnect P95 | `403.556 ms` | `< 250 ms` | FAIL |
+
+The acceptance targets were not weakened. The identical test is part of the
+Linux production-infrastructure workflow so application cost can be separated
+from local Windows storage and scheduler behavior.
+
+##### Regression And Security Evidence
+
+- `go test ./... -count=1`: PASS.
+- `go vet ./...`: PASS.
+- `go build ./...`: PASS.
+- `go mod verify`: PASS.
+- Player Platform lint, TypeScript, 22 unit tests, and production build: PASS.
+- Player Platform Playwright: 27 passed, 4 documented replay-solve exclusions.
+- Admin CRM lint, TypeScript, 5 unit tests, and production build: PASS.
+- Admin CRM Playwright: 3 passed.
+- Player Platform and Admin CRM npm dependency audits: zero vulnerabilities.
+- `govulncheck ./...`: zero reachable vulnerabilities.
+- Secret-pattern scan: no committed production credential detected.
+- Existing authorization, cross-player action, sequence, stale-state,
+  oversized-payload, replay-tamper, signature, and rate-limit regression suites
+  remain green.
+
+##### Files Changed
+
+- `.github/workflows/sprint-6-phase-9.yml`
+- `backend/cmd/api/main.go`
+- `backend/go.mod`
+- `backend/go.sum`
+- `backend/internal/config/config.go`
+- `backend/internal/db/auth_postgres.go`
+- `backend/internal/db/auth_postgres_integration_test.go`
+- `backend/internal/db/db.go`
+- `backend/internal/db/hub_postgres_integration_test.go`
+- `backend/internal/games/maze/replay/cross_platform_test.go`
+- `backend/internal/games/maze/solver/phase9_qualification_test.go`
+- `backend/internal/games/maze/solver/solver_test.go`
+- `backend/internal/persistence/postgres/games/puzzle_repository.go`
+- `backend/internal/persistence/postgres/games/puzzle_repository_test.go`
+- `backend/internal/realtime/phase9_load_test.go`
+- `backend/internal/realtime/service.go`
+- `backend/internal/realtime/service_test.go`
+- `backend/internal/redis/redis.go`
+- `backend/internal/redis/redis_test.go`
+- `docker-compose.yml`
+
+No database migration or public API/event contract changed.
+
+##### Remaining Freeze Gates
+
+**High**
+
+- Accepted-action and reconnect latency have not yet met their targets on
+  documented reference infrastructure.
+- The minimum two-hour steady-state soak and extended pre-launch soak have not
+  been completed on target infrastructure.
+- Production monitoring export, tracing, alert delivery, and dashboards have
+  not been validated against the selected monitoring stack.
+- Independent penetration testing has not been completed.
+
+**Medium**
+
+- Cross-platform deterministic vectors and native Linux race instrumentation
+  require the committed GitHub Actions run.
+- Production container builds require the committed Linux workflow run because
+  Docker is unavailable on this workstation.
+- A target-environment rolling restart and multi-instance recovery drill remains
+  a Release 1.0 deployment validation.
+
+**Low**
+
+- Four non-desktop replay-solve Playwright cases remain intentional documented
+  exclusions; authoritative rendering is covered on those targets and the full
+  replay solve is covered on desktop Chromium.
+
+##### Boundary Verification
+
+- Realtime Arena still dispatches through generic game contracts.
+- No Maze networking, authentication, matchmaking, session, storage, wallet,
+  treasury, or Admin CRM duplicate was introduced.
+- The client remains intent-only.
+- PostgreSQL, Redis, and object-storage corrections are platform-generic and
+  backward compatible.
+- Frozen Sprint 1 through Sprint 5 regression suites remain green.
+
+##### Freeze Recommendation
+
+**DO NOT FREEZE SPRINT 6.**
+
+Phase 9 implementation is functioning, but the documented freeze rules prohibit
+approval while high-severity performance, soak, observability, and security
+evidence remains outstanding. Do not create the Sprint 6 freeze tag until every
+high gate above is closed and the final validation workflow passes.
 
 ### Sprint 7: Tournaments, Leaderboards, Seasons, And Rewards
 

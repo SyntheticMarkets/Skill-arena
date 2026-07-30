@@ -146,8 +146,8 @@ func (s *Service) Queue(ctx context.Context, userID string, request QueueRequest
 	_ = s.setPresence(ctx, userID, models.PresenceInQueue, "", "", "", request.Region)
 
 	lockKey := "realtime:matchmaking:" + entry.GameID + ":" + entry.Mode + ":" + entry.WalletCategory + ":" + entry.Region
-	lockToken, locked, err := s.store.Redis().Lock(ctx, lockKey, 5*time.Second)
-	if err != nil || !locked {
+	lockToken, err := s.acquireMatchmakingLock(ctx, lockKey)
+	if err != nil {
 		return &entry, nil, err
 	}
 	defer s.store.Redis().Unlock(context.Background(), lockKey, lockToken)
@@ -192,6 +192,25 @@ func (s *Service) Queue(ctx context.Context, userID string, request QueueRequest
 	_ = s.setPresence(ctx, userID, models.PresenceInMatch, "", "", match.ID, request.Region)
 	_ = s.setPresence(ctx, opponent.UserID, models.PresenceInMatch, "", "", match.ID, opponent.Region)
 	return &entry, match, nil
+}
+
+func (s *Service) acquireMatchmakingLock(ctx context.Context, key string) (string, error) {
+	for {
+		token, locked, err := s.store.Redis().Lock(ctx, key, 5*time.Second)
+		if err != nil {
+			return "", err
+		}
+		if locked {
+			return token, nil
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (s *Service) createMatch(ctx context.Context, first models.RealtimeQueueEntry, second *models.RealtimeQueueEntry) (*models.RealtimeMatch, error) {

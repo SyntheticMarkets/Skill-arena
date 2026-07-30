@@ -29,10 +29,12 @@ func main() {
 		log.Fatalf("invalid payment provider configuration: %v", err)
 	}
 	store, err := db.NewWithOptions(ctx, db.Options{
-		DatabaseURL: cfg.DatabaseURL,
-		Environment: cfg.Environment,
-		RedisURL:    cfg.RedisURL,
-		Storage:     cfg.Settings.Storage,
+		DatabaseURL:          cfg.DatabaseURL,
+		DatabaseMaxOpenConns: cfg.DatabaseMaxOpenConns,
+		DatabaseMaxIdleConns: cfg.DatabaseMaxIdleConns,
+		Environment:          cfg.Environment,
+		RedisURL:             cfg.RedisURL,
+		Storage:              cfg.Settings.Storage,
 	})
 	if err != nil {
 		log.Fatalf("failed to connect database: %v", err)

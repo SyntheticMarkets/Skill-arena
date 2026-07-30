@@ -13,12 +13,14 @@ import (
 )
 
 type Config struct {
-	HTTPAddr    string
-	DatabaseURL string
-	JWTSecret   string
-	Environment string
-	RedisURL    string
-	Settings    *RuntimeSettings
+	HTTPAddr             string
+	DatabaseURL          string
+	DatabaseMaxOpenConns int
+	DatabaseMaxIdleConns int
+	JWTSecret            string
+	Environment          string
+	RedisURL             string
+	Settings             *RuntimeSettings
 }
 
 func Load() (*Config, error) {
@@ -26,6 +28,12 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		HTTPAddr:    os.Getenv("SKILL_ARENA_HTTP_ADDR"),
 		DatabaseURL: os.Getenv("SKILL_ARENA_DATABASE_URL"),
+		DatabaseMaxOpenConns: envInt(
+			"SKILL_ARENA_DATABASE_MAX_OPEN_CONNS", 50,
+		),
+		DatabaseMaxIdleConns: envInt(
+			"SKILL_ARENA_DATABASE_MAX_IDLE_CONNS", 20,
+		),
 		JWTSecret:   os.Getenv("SKILL_ARENA_JWT_SECRET"),
 		Environment: strings.ToLower(envString("SKILL_ARENA_ENV", "development")),
 		RedisURL:    os.Getenv("SKILL_ARENA_REDIS_URL"),
@@ -40,6 +48,10 @@ func Load() (*Config, error) {
 	}
 	if cfg.Environment == "production" && !isPostgresURL(cfg.DatabaseURL) {
 		return nil, errors.New("production requires PostgreSQL SKILL_ARENA_DATABASE_URL")
+	}
+	if cfg.DatabaseMaxOpenConns < 1 || cfg.DatabaseMaxIdleConns < 0 ||
+		cfg.DatabaseMaxIdleConns > cfg.DatabaseMaxOpenConns {
+		return nil, errors.New("database connection pool settings are invalid")
 	}
 	if cfg.JWTSecret == "" {
 		return nil, errors.New("SKILL_ARENA_JWT_SECRET is required")

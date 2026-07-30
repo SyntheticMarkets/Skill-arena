@@ -119,6 +119,26 @@ func TestSolverClassifiesUniqueAndMultipleSolutions(t *testing.T) {
 	}
 }
 
+func TestPhase9CrossPlatformSolverVector(t *testing.T) {
+	result, err := testSolver(t).Solve(t.Context(), uniqueBoard(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		expectedDependency = "sha256:f0d8b1ef8958271be50f1a078ba91fe38d413d37f6e1c3ccc3b69d81c7892ead"
+		expectedSolution   = "sha256:c2bdc1a4e6469caab200dac77ff57a53786fe85f96d0def99d98b060005cc570"
+		expectedFinal      = "sha256:87b3e1ac75a950a13a6496d4470cb0803ebaf6e6508c8e7b01ae89259bbc4b27"
+	)
+	if result.DependencyHash != expectedDependency ||
+		result.SolutionHash != expectedSolution ||
+		result.FinalChecksum != expectedFinal {
+		t.Fatalf(
+			"cross-platform solver vector dependency=%s solution=%s final=%s",
+			result.DependencyHash, result.SolutionHash, result.FinalChecksum,
+		)
+	}
+}
+
 func TestSolverRejectsDeadlockMalformedGeometryAndIsolatedCompetition(t *testing.T) {
 	instance := testSolver(t)
 	if _, err := instance.Solve(context.Background(), deadlockedBoard(), false); !errors.Is(err, ErrDeadlock) {

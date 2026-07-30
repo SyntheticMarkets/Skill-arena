@@ -1,0 +1,165 @@
+name: Sprint 6 Phase 9 Validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-vectors:
+    name: Deterministic vectors (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Verify generator, solver, and replay vectors
+        run: go test ./internal/games/maze/generator ./internal/games/maze/solver ./internal/games/maze/replay -run "TestProductionProcessorIsReproducibleAcrossWorkerCounts|TestPhase9CrossPlatform" -count=1 -v
+
+  production-infrastructure:
+    name: Linux production infrastructure
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: skillarena_phase9
+          POSTGRES_USER: skillarena
+          POSTGRES_PASSWORD: phase9-postgres-ci
+        ports:
+          - 55433:5432
+        options: >-
+          --health-cmd "pg_isready -U skillarena -d skillarena_phase9"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 56379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Start pinned S3-compatible storage
+        run: |
+          docker run -d --name phase9-minio \
+            -p 59000:9000 \
+            -e MINIO_ROOT_USER=phase9minio \
+            -e MINIO_ROOT_PASSWORD=phase9-minio-ci-secret \
+            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:59000/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs phase9-minio
+          exit 1
+      - name: Create private validation bucket
+        run: |
+          curl --fail --silent --show-error \
+            https://dl.min.io/client/mc/release/linux-amd64/mc.RELEASE.2025-04-16T18-13-26Z \
+            --output /tmp/mc
+          chmod +x /tmp/mc
+          /tmp/mc alias set phase9 http://127.0.0.1:59000 phase9minio phase9-minio-ci-secret
+          /tmp/mc mb --ignore-existing phase9/skill-arena-phase9
+          /tmp/mc anonymous set none phase9/skill-arena-phase9
+      - name: Verify live PostgreSQL, Redis, and object storage
+        working-directory: backend
+        env:
+          SKILL_ARENA_TEST_POSTGRES_URL: postgresql://skillarena:phase9-postgres-ci@127.0.0.1:55433/skillarena_phase9?sslmode=disable
+          SKILL_ARENA_TEST_REDIS_URL: redis://127.0.0.1:56379/0
+          SKILL_ARENA_TEST_S3_ENDPOINT: http://127.0.0.1:59000
+          SKILL_ARENA_TEST_S3_BUCKET: skill-arena-phase9
+          SKILL_ARENA_TEST_S3_ACCESS_KEY: phase9minio
+          SKILL_ARENA_TEST_S3_SECRET_KEY: phase9-minio-ci-secret
+        run: go test ./internal/db ./internal/redis ./internal/storage -count=1 -v -timeout 20m
+      - name: Create isolated realtime load database
+        env:
+          PGPASSWORD: phase9-postgres-ci
+        run: createdb -h 127.0.0.1 -p 55433 -U skillarena skillarena_phase9_load
+      - name: Verify 100 simultaneous live Maze matches
+        working-directory: backend
+        env:
+          SKILL_ARENA_PHASE9_LOAD_POSTGRES_URL: postgresql://skillarena:phase9-postgres-ci@127.0.0.1:55433/skillarena_phase9_load?sslmode=disable
+          SKILL_ARENA_PHASE9_LOAD_REDIS_URL: redis://127.0.0.1:56379/0
+          SKILL_ARENA_PHASE9_LOAD_S3_ENDPOINT: http://127.0.0.1:59000
+          SKILL_ARENA_PHASE9_LOAD_S3_BUCKET: skill-arena-phase9
+          SKILL_ARENA_PHASE9_LOAD_S3_ACCESS_KEY: phase9minio
+          SKILL_ARENA_PHASE9_LOAD_S3_SECRET_KEY: phase9-minio-ci-secret
+        run: go test ./internal/realtime -run TestPhase9OneHundredLiveMazeMatches -count=1 -v -timeout 25m
+      - name: Verify 100,000-candidate qualification corpus
+        working-directory: backend
+        env:
+          SKILL_ARENA_PHASE9_CORPUS_SIZE: "100000"
+        run: go test ./internal/games/maze/solver -run TestPhase9LargeQualificationCorpus -count=1 -v -timeout 30m
+      - name: Verify native race instrumentation
+        working-directory: backend
+        run: go test -race ./internal/games/maze/... ./internal/realtime ./internal/redis -count=1 -timeout 20m
+      - name: Build production images
+        run: |
+          docker build -t skill-arena-backend:phase9 backend
+          docker build --build-arg NEXT_PUBLIC_API_BASE_URL=https://api.example.invalid -t skill-arena-frontend:phase9 frontend
+          docker build -t skill-arena-admin-crm:phase9 admin-crm
+
+  regression:
+    name: Full regression
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            admin-crm/package-lock.json
+      - name: Backend regression
+        working-directory: backend
+        run: |
+          go test ./... -count=1
+          go vet ./...
+          go build ./...
+          go mod verify
+      - name: Player platform regression
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_BASE_URL: https://api.example.invalid
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm test
+          npm run build
+          npm audit --audit-level=high
+      - name: Admin CRM regression
+        working-directory: admin-crm
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm test
+          npm run build
+          npm audit --audit-level=high

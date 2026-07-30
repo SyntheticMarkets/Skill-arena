@@ -161,13 +161,24 @@ func (s *Store) migrateLegacyIdentitySnapshot(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
+	migratedUserIDs := make(map[string]struct{}, len(users))
 	for _, user := range users {
-		_, err = tx.ExecContext(ctx, `INSERT INTO users (`+userColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(id) DO NOTHING`,
+		_, err = tx.ExecContext(ctx, `INSERT INTO users (`+userColumns+`)
+SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
+WHERE NOT EXISTS (SELECT 1 FROM users WHERE id=$1 OR LOWER(email)=LOWER($2))`,
 			user.ID, user.Email, user.Country, user.DateOfBirth, user.TermsAcceptedAt, user.Username, user.DisplayName, user.HiddenFromPublic,
 			user.PasswordHash, user.Role, user.EmailVerified, user.KYCStatus, user.Status, user.CreatedAt, user.UpdatedAt)
 		if err != nil {
 			return err
 		}
+		var userIDExists bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)`, user.ID).Scan(&userIDExists); err != nil {
+			return err
+		}
+		if !userIDExists {
+			continue
+		}
+		migratedUserIDs[user.ID] = struct{}{}
 		entries := passwords[user.ID]
 		if len(entries) == 0 {
 			entries = []*models.PasswordHistoryEntry{{UserID: user.ID, PasswordHash: user.PasswordHash, CreatedAt: user.CreatedAt}}
@@ -180,18 +191,27 @@ func (s *Store) migrateLegacyIdentitySnapshot(ctx context.Context) error {
 		}
 	}
 	for _, setting := range mfa {
+		if _, ok := migratedUserIDs[setting.UserID]; !ok {
+			continue
+		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO mfa_settings(user_id,enabled,totp_secret_ciphertext,recovery_code_hashes,confirmed_at,updated_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(user_id) DO NOTHING`, setting.UserID, setting.Enabled, nullableString(setting.TOTPSecretCiphertext), pq.Array(setting.RecoveryCodeHashes), setting.ConfirmedAt, setting.UpdatedAt)
 		if err != nil {
 			return err
 		}
 	}
 	for _, state := range loginSecurity {
+		if _, ok := migratedUserIDs[state.UserID]; !ok {
+			continue
+		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO login_security(user_id,failed_count,locked_until,last_failed_at,last_success_at,last_ip_address,last_user_agent,suspicious_flag,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(user_id) DO NOTHING`, state.UserID, state.FailedCount, state.LockedUntil, state.LastFailedAt, state.LastSuccessAt, nullableString(state.LastIPAddress), nullableString(state.LastUserAgent), nullableString(state.SuspiciousFlag), state.UpdatedAt)
 		if err != nil {
 			return err
 		}
 	}
 	for _, device := range devices {
+		if _, ok := migratedUserIDs[device.UserID]; !ok {
+			continue
+		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO devices(id,user_id,fingerprint,device_name,os,browser,last_seen,created_at,revoked_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(user_id,fingerprint) DO NOTHING`, device.ID, device.UserID, device.Fingerprint, nullableString(device.DeviceName), nullableString(device.OS), nullableString(device.Browser), device.LastSeen, device.CreatedAt, device.RevokedAt)
 		if err != nil {
 			return err
@@ -303,6 +323,7 @@ func auditHash(previous, id, actorID, action, targetID, ipAddress string, metada
 }
 
 func pgAppendAuditTx(ctx context.Context, tx *sql.Tx, log *models.AuditLog) error {
+	log.CreatedAt = log.CreatedAt.UTC().Truncate(time.Microsecond)
 	var previous sql.NullString
 	err := tx.QueryRowContext(ctx, `SELECT entry_hash FROM audit_logs WHERE entry_hash IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1 FOR SHARE`).Scan(&previous)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {

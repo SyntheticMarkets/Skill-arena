@@ -116,12 +116,14 @@ type Store struct {
 }
 
 type Options struct {
-	DatabaseURL      string
-	Environment      string
-	RedisURL         string
-	Storage          config.StorageSettings
-	GamesRegistry    *gamesregistry.Registry
-	PuzzleRepository mazegenerator.Repository
+	DatabaseURL          string
+	DatabaseMaxOpenConns int
+	DatabaseMaxIdleConns int
+	Environment          string
+	RedisURL             string
+	Storage              config.StorageSettings
+	GamesRegistry        *gamesregistry.Registry
+	PuzzleRepository     mazegenerator.Repository
 }
 
 type storeSnapshot struct {
@@ -324,8 +326,28 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 		if err != nil {
 			return nil, err
 		}
-		pg.SetMaxOpenConns(25)
-		pg.SetMaxIdleConns(10)
+		maxOpenConnections := opts.DatabaseMaxOpenConns
+		maxIdleConnections := opts.DatabaseMaxIdleConns
+		if maxOpenConnections <= 0 {
+			maxOpenConnections = 25
+			if environment == "production" {
+				maxOpenConnections = 50
+			}
+		}
+		if maxIdleConnections < 0 {
+			maxIdleConnections = 0
+		} else if maxIdleConnections == 0 {
+			maxIdleConnections = 10
+			if environment == "production" {
+				maxIdleConnections = 20
+			}
+		}
+		if maxIdleConnections > maxOpenConnections {
+			_ = pg.Close()
+			return nil, errors.New("database idle connection limit exceeds open connection limit")
+		}
+		pg.SetMaxOpenConns(maxOpenConnections)
+		pg.SetMaxIdleConns(maxIdleConnections)
 		pg.SetConnMaxLifetime(30 * time.Minute)
 		if err := pg.PingContext(ctx); err != nil {
 			_ = pg.Close()
@@ -3495,6 +3517,9 @@ func (s *Store) applyGameProgressionLocked(session *models.GameSession, valid bo
 }
 
 func (s *Store) GetProgressionByUserID(ctx context.Context, userID string) (*models.Progression, error) {
+	if s.usesPostgresAuth() {
+		return s.GetHubProgression(ctx, userID)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
