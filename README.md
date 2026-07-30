@@ -8148,6 +8148,80 @@ throttled to manufacture a passing result.
 
 No Sprint 6 freeze tag was created.
 
+###### PostgreSQL Durability Attribution Pass 3
+
+Remediation date: 2026-07-30
+
+Decision: **CHANGES REQUIRED**
+
+The third pass instrumented the production PostgreSQL path deeply enough to
+separate application-pool waits, SQL work, lock contention, WAL insertion, and
+durable commit pressure:
+
+- Connection acquisition is not the bottleneck. The Linux action-path P95 was
+  `2.845 us`, with a pool wait count and wait duration of zero.
+- The authoritative action statement remained the dominant stage at
+  `250.605 ms` P95 before index cleanup and `297.454 ms` P95 in the subsequent
+  comparison run. The variation confirms that the hosted runner is noisy, but
+  both results are far outside the release target.
+- PostgreSQL observed sustained `BufferContent`, `WALWrite`, `WALInsert`,
+  lock-manager, and relation-extension waits.
+- The baseline wrote `45,828,608` WAL bytes and requested `2,199` WAL syncs
+  during the short 100-match run.
+- Migration `011_realtime_write_amplification.sql` removes two indexes that
+  exactly duplicated existing unique indexes and replaces the participant
+  timestamp index, which was rewritten on every action, with a stable user
+  lookup index.
+- Realtime lifecycle transitions now use a guarded single-statement transaction
+  rather than explicit begin, lock, persist, and commit round trips.
+- Atomicity, stale-write rejection, idempotency, hash-chain integrity, and
+  synchronous durability remain unchanged.
+
+Implementation and diagnostics commits:
+
+- `a27759e` - Instrument realtime database contention.
+- `dc7bc8a` - Collapse action persistence into one transaction statement.
+- `01c347c` - Measure PostgreSQL realtime wait pressure.
+- `597df25` - Provision Phase 9 database diagnostics capacity.
+- `46743f7` - Reduce realtime database write amplification.
+
+Linux diagnostic evidence:
+
+- Baseline workflow:
+  `https://github.com/SyntheticMarkets/Skill-arena/actions/runs/30577374455`.
+- Index-cleanup comparison:
+  `https://github.com/SyntheticMarkets/Skill-arena/actions/runs/30578680460`.
+- Full backend, Player Platform, and Admin CRM regressions: PASS.
+- Windows, Linux, and macOS deterministic vectors: PASS.
+- PostgreSQL, Redis, and MinIO integration: PASS.
+- 100,000-candidate qualification corpus: PASS.
+- Native race instrumentation: PASS.
+- Production image builds: PASS.
+- Linux 100-match latency gate: FAIL.
+
+Latest Linux production-infrastructure measurements:
+
+| Operation | Measured | Target | Result |
+|---|---:|---:|---|
+| Match preparation P99 | `1.176 s` | `< 5 s` | PASS |
+| Accepted action P95 | `370.386 ms` | `< 50 ms` | FAIL |
+| Accepted action P99 | `654.509 ms` | `< 100 ms` | FAIL |
+| Ordinary action P95 | `326.009 ms` | diagnostic | NOT A GATE |
+| Ordinary action P99 | `531.547 ms` | diagnostic | NOT A GATE |
+| Completion action P95 | `1.172 s` | diagnostic | NOT A GATE |
+| Reconnect P95 | `484.487 ms` | `< 250 ms` | FAIL |
+
+The cleanup comparison wrote `41,294,502` WAL bytes, approximately 9.9 percent
+less than the instrumented baseline. That reduction is useful but insufficient:
+the run still requested `2,071` WAL syncs and observed heavy shared-buffer and
+WAL lock contention. The remaining remediation therefore requires a deliberate
+durable group-commit design or target-infrastructure storage validation; it
+cannot be closed safely by reducing puzzle complexity, acknowledging actions
+before persistence, disabling `synchronous_commit`, or weakening replay and
+receipt integrity.
+
+No Sprint 6 freeze tag was created.
+
 ##### Remaining Freeze Gates
 
 **High**
