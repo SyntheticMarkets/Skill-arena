@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -35,10 +36,18 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 	timings := &phase9TimingRecorder{values: map[string][]time.Duration{}}
 	ctx = observability.WithTimingRecorder(ctx, timings)
 	const matchCount = 100
+	databasePoolSize := matchCount
+	if configured := os.Getenv("SKILL_ARENA_PHASE9_DATABASE_POOL_SIZE"); configured != "" {
+		parsed, parseErr := strconv.Atoi(configured)
+		if parseErr != nil || parsed < 1 || parsed > matchCount {
+			t.Fatalf("invalid SKILL_ARENA_PHASE9_DATABASE_POOL_SIZE %q", configured)
+		}
+		databasePoolSize = parsed
+	}
 	store, err := db.NewWithOptions(ctx, db.Options{
 		DatabaseURL: databaseURL, RedisURL: redisURL, Environment: "production",
-		DatabaseMaxOpenConns: matchCount,
-		DatabaseMaxIdleConns: matchCount,
+		DatabaseMaxOpenConns: databasePoolSize,
+		DatabaseMaxIdleConns: databasePoolSize,
 		Storage: config.StorageSettings{
 			Provider: "s3-compatible", Endpoint: s3Endpoint, Bucket: s3Bucket,
 			AccessKey: s3AccessKey, SecretKey: s3SecretKey, Region: "us-east-1",
@@ -48,6 +57,16 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close(context.Background()) })
+	postgresDiagnostics, err := startPhase9PostgresDiagnostics(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postgresDiagnosticsStopped := false
+	defer func() {
+		if !postgresDiagnosticsStopped {
+			_, _ = postgresDiagnostics.Stop(context.Background())
+		}
+	}()
 	poolStop := make(chan struct{})
 	poolStopped := make(chan struct{})
 	var poolMaxInUse atomic.Int64
@@ -262,6 +281,11 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 	}
 	close(poolStop)
 	<-poolStopped
+	postgresStats, err := postgresDiagnostics.Stop(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postgresDiagnosticsStopped = true
 
 	prepP99 := phase9Quantile(preparation, 99)
 	actionP95 := phase9Quantile(actionLatencies, 95)
@@ -289,6 +313,17 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 			stats.WaitDuration, stats.Idle,
 		)
 	}
+	for _, line := range postgresDiagnostics.logLines() {
+		t.Log(line)
+	}
+	t.Logf(
+		"pg_stats transactions=%d blocks_read=%d blocks_hit=%d temp_files=%d temp_bytes=%d deadlocks=%d block_read_ms=%.3f block_write_ms=%.3f wal_records=%d wal_bytes=%d wal_writes=%d wal_syncs=%d wal_write_ms=%.3f wal_sync_ms=%.3f",
+		postgresStats.transactions, postgresStats.blocksRead, postgresStats.blocksHit,
+		postgresStats.tempFiles, postgresStats.tempBytes, postgresStats.deadlocks,
+		postgresStats.blockReadMS, postgresStats.blockWriteMS,
+		postgresStats.walRecords, postgresStats.walBytes, postgresStats.walWrites,
+		postgresStats.walSyncs, postgresStats.walWriteMS, postgresStats.walSyncMS,
+	)
 	if prepP99 > 5*time.Second {
 		t.Fatalf("match preparation p99 %s exceeds 5s", prepP99)
 	}
