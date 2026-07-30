@@ -301,19 +301,22 @@ func (s *Service) GameAction(
 	envelope interfaces.ActionEnvelope,
 	latency time.Duration,
 ) (gamesession.ActionResult, error) {
-	match, _, err := s.participant(ctx, userID, matchID)
-	if err != nil {
-		return gamesession.ActionResult{}, err
-	}
 	if s.games == nil {
 		return gamesession.ActionResult{}, gamesession.ErrRuntimeUnavailable
 	}
-	result, err := s.games.SubmitAction(ctx, match, userID, envelope, latency)
+	result, err := s.games.SubmitAction(ctx, matchID, userID, envelope, latency)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return gamesession.ActionResult{}, ErrNotParticipant
+		}
 		return gamesession.ActionResult{}, err
 	}
 	if result.Outcome != nil && result.Outcome.Status == "complete" &&
-		!terminal(match.Status) {
+		result.Match != nil && !terminal(result.Match.Status) {
+		match, loadErr := s.store.GetRealtimeMatch(ctx, matchID)
+		if loadErr != nil {
+			return gamesession.ActionResult{}, loadErr
+		}
 		completed, transitionErr := s.transition(
 			ctx, match, models.MatchCompleted, userID, "game.match.completed", result.Outcome,
 		)
@@ -608,25 +611,24 @@ func (s *Service) transition(ctx context.Context, match *models.RealtimeMatch, t
 		return nil, err
 	}
 	raw, _ := json.Marshal(payload)
-	if _, err := s.store.AppendRealtimeEvent(ctx, saved.ID, userID, eventType, raw); err != nil {
-		return nil, err
-	}
-	current, err := s.store.GetRealtimeMatch(ctx, saved.ID)
+	event, err := s.store.AppendRealtimeEvent(ctx, saved.ID, userID, eventType, raw)
 	if err != nil {
 		return nil, err
 	}
-	state, err := json.Marshal(current)
+	saved.Sequence = event.Sequence
+	saved.UpdatedAt = event.ServerTime
+	state, err := json.Marshal(saved)
 	if err != nil {
 		return nil, err
 	}
 	sum := sha256.Sum256(state)
 	if err := s.store.SaveRealtimeSnapshot(ctx, models.RealtimeSnapshot{
-		MatchID: current.ID, Version: current.StateVersion, Sequence: current.Sequence,
+		MatchID: saved.ID, Version: saved.StateVersion, Sequence: saved.Sequence,
 		State: state, Checksum: hex.EncodeToString(sum[:]), CreatedAt: time.Now().UTC(),
 	}); err != nil {
 		return nil, err
 	}
-	return current, nil
+	return saved, nil
 }
 
 func (s *Service) participant(ctx context.Context, userID, matchID string) (*models.RealtimeMatch, *models.RealtimeParticipant, error) {

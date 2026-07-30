@@ -231,8 +231,8 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 	if actionP95 > 50*time.Millisecond || actionP99 > 100*time.Millisecond {
 		t.Fatalf("action latency p95=%s p99=%s exceeds target", actionP95, actionP99)
 	}
-	if reconnectP95 > 750*time.Millisecond {
-		t.Fatalf("reconnect p95 %s exceeds 750ms", reconnectP95)
+	if reconnectP95 > 250*time.Millisecond {
+		t.Fatalf("reconnect p95 %s exceeds 250ms", reconnectP95)
 	}
 }
 

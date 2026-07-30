@@ -81,26 +81,43 @@ ON CONFLICT(match_id,user_id) DO UPDATE SET status=EXCLUDED.status,ready=EXCLUDE
 func (s *Store) GetRealtimeMatch(ctx context.Context, matchID string) (*models.RealtimeMatch, error) {
 	if s.pg != nil {
 		var m models.RealtimeMatch
-		err := s.pg.QueryRowContext(ctx, `SELECT id,game_id,game_version,rules_version,protocol_version,replay_version,mode,status,region,wallet_category,seed_reference,state_version,sequence,created_at,updated_at,started_at,completed_at FROM realtime_matches WHERE id=$1`, matchID).
-			Scan(&m.ID, &m.GameID, &m.GameVersion, &m.RulesVersion, &m.ProtocolVersion, &m.ReplayVersion,
-				&m.Mode, &m.Status, &m.Region, &m.WalletCategory, &m.SeedReference, &m.StateVersion,
-				&m.Sequence, &m.CreatedAt, &m.UpdatedAt, &m.StartedAt, &m.CompletedAt)
-		if err != nil {
-			return nil, err
-		}
-		rows, err := s.pg.QueryContext(ctx, `SELECT match_id,user_id,status,ready,rating,region,latency_ms,last_sequence,joined_at,last_seen_at,left_at FROM realtime_participants WHERE match_id=$1 ORDER BY joined_at`, matchID)
+		rows, err := s.pg.QueryContext(ctx, `SELECT
+m.id,m.game_id,m.game_version,m.rules_version,m.protocol_version,m.replay_version,
+m.mode,m.status,m.region,m.wallet_category,m.seed_reference,m.state_version,m.sequence,
+m.created_at,m.updated_at,m.started_at,m.completed_at,
+p.match_id,p.user_id,p.status,p.ready,p.rating,p.region,p.latency_ms,p.last_sequence,
+p.joined_at,p.last_seen_at,p.left_at
+FROM realtime_matches m
+JOIN realtime_participants p ON p.match_id=m.id
+WHERE m.id=$1
+ORDER BY p.joined_at`, matchID)
 		if err != nil {
 			return nil, err
 		}
 		defer rows.Close()
+		found := false
 		for rows.Next() {
 			var p models.RealtimeParticipant
-			if err := rows.Scan(&p.MatchID, &p.UserID, &p.Status, &p.Ready, &p.Rating, &p.Region, &p.LatencyMS, &p.LastSequence, &p.JoinedAt, &p.LastSeenAt, &p.LeftAt); err != nil {
+			if err := rows.Scan(
+				&m.ID, &m.GameID, &m.GameVersion, &m.RulesVersion, &m.ProtocolVersion,
+				&m.ReplayVersion, &m.Mode, &m.Status, &m.Region, &m.WalletCategory,
+				&m.SeedReference, &m.StateVersion, &m.Sequence, &m.CreatedAt, &m.UpdatedAt,
+				&m.StartedAt, &m.CompletedAt, &p.MatchID, &p.UserID, &p.Status, &p.Ready,
+				&p.Rating, &p.Region, &p.LatencyMS, &p.LastSequence, &p.JoinedAt,
+				&p.LastSeenAt, &p.LeftAt,
+			); err != nil {
 				return nil, err
 			}
+			found = true
 			m.Participants = append(m.Participants, p)
 		}
-		return &m, rows.Err()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, sql.ErrNoRows
+		}
+		return &m, nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -144,7 +161,7 @@ func (s *Store) SaveRealtimeMatch(ctx context.Context, match models.RealtimeMatc
 		if count != 1 {
 			return nil, ErrRealtimeConflict
 		}
-		return s.GetRealtimeMatch(ctx, match.ID)
+		return cloneRealtimeMatch(&match), nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -162,15 +179,17 @@ func (s *Store) SaveRealtimeMatch(ctx context.Context, match models.RealtimeMatc
 
 func (s *Store) SaveRealtimeParticipant(ctx context.Context, p models.RealtimeParticipant) error {
 	if s.pg != nil {
-		tx, err := s.pg.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-		if err := insertRealtimeParticipant(ctx, tx, p); err != nil {
-			return err
-		}
-		return tx.Commit()
+		_, err := s.pg.ExecContext(ctx, `INSERT INTO realtime_participants
+(match_id,user_id,status,ready,rating,region,latency_ms,last_sequence,joined_at,last_seen_at,left_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+ON CONFLICT(match_id,user_id) DO UPDATE SET
+status=EXCLUDED.status,ready=EXCLUDED.ready,latency_ms=EXCLUDED.latency_ms,
+last_sequence=EXCLUDED.last_sequence,last_seen_at=EXCLUDED.last_seen_at,
+left_at=EXCLUDED.left_at`,
+			p.MatchID, p.UserID, p.Status, p.Ready, p.Rating, p.Region, p.LatencyMS,
+			p.LastSequence, p.JoinedAt, p.LastSeenAt, p.LeftAt,
+		)
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

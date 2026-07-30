@@ -74,8 +74,15 @@ realtime_matches,users CASCADE`); err != nil {
 		StateVersionAfter: 1, Transition: json.RawMessage(`{"accepted":true}`),
 		ReceiptHash: "receipt-hash", ServerReceivedAt: now, ProcessedAt: now,
 	}
+	actionContext, err := store.GetGameActionContext(
+		ctx, match.ID, user.ID, receipt.ActionID, receipt.ClientSequence,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	committed, events, err := store.CommitGameAction(
-		ctx, initial, next, receipt,
+		ctx, initial, next, receipt, actionContext.StreamSequence,
+		actionContext.StreamHash,
 		[]models.GameEventDraft{{Type: "game.action.processed", Payload: json.RawMessage(`{"accepted":true}`)}},
 	)
 	if err != nil || committed.FirstEventSequence == 0 ||
@@ -93,6 +100,12 @@ realtime_matches,users CASCADE`); err != nil {
 	}
 
 	expected := *loaded
+	concurrentContext, err := store.GetGameActionContext(
+		ctx, match.ID, user.ID, "action-concurrent-a", 2,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	results := make(chan error, 2)
 	var wait sync.WaitGroup
 	for index := 0; index < 2; index++ {
@@ -114,7 +127,8 @@ realtime_matches,users CASCADE`); err != nil {
 				ReceiptHash: "receipt-concurrent", ServerReceivedAt: now, ProcessedAt: now,
 			}
 			_, _, commitErr := store.CommitGameAction(
-				ctx, expected, candidate, action,
+				ctx, expected, candidate, action, concurrentContext.StreamSequence,
+				concurrentContext.StreamHash,
 				[]models.GameEventDraft{{Type: "game.action.processed", Payload: json.RawMessage(`{}`)}},
 			)
 			results <- commitErr

@@ -37,7 +37,7 @@ import (
 	"skill-arena/internal/storage"
 	"skill-arena/migrations"
 
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 type Store struct {
@@ -322,7 +322,7 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 	}
 
 	if persistence == "postgres" {
-		pg, err := sql.Open("postgres", databaseURL)
+		pg, err := sql.Open("pgx", databaseURL)
 		if err != nil {
 			return nil, err
 		}
@@ -386,6 +386,12 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 			_ = pg.Close()
 			return nil, fmt.Errorf("migrate Arena Hub state: %w", err)
 		}
+		if environment == "production" {
+			if err := warmPostgresPool(ctx, pg, maxIdleConnections); err != nil {
+				_ = pg.Close()
+				return nil, fmt.Errorf("warm PostgreSQL pool: %w", err)
+			}
+		}
 	} else {
 		if err := store.load(); err != nil {
 			return nil, err
@@ -448,6 +454,39 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 	}
 
 	return store, nil
+}
+
+func warmPostgresPool(ctx context.Context, database *sql.DB, size int) error {
+	if database == nil || size <= 0 {
+		return nil
+	}
+	ready := make(chan error, size)
+	release := make(chan struct{})
+	var wait sync.WaitGroup
+	for range size {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			connection, err := database.Conn(ctx)
+			if err == nil {
+				err = connection.PingContext(ctx)
+			}
+			ready <- err
+			<-release
+			if connection != nil {
+				_ = connection.Close()
+			}
+		}()
+	}
+	var firstErr error
+	for range size {
+		if err := <-ready; err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	close(release)
+	wait.Wait()
+	return firstErr
 }
 
 func isPostgresURL(value string) bool {

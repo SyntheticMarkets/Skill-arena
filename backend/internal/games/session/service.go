@@ -35,6 +35,7 @@ type ActionResult struct {
 	Completion *interfaces.CompletionResult `json:"completion,omitempty"`
 	Outcome    *interfaces.MatchOutcome     `json:"outcome,omitempty"`
 	Duplicate  bool                         `json:"duplicate"`
+	Match      *models.RealtimeMatch        `json:"-"`
 }
 
 type SyncResult struct {
@@ -130,15 +131,12 @@ func (s *Service) PrepareMatch(ctx context.Context, match *models.RealtimeMatch)
 
 func (s *Service) SubmitAction(
 	ctx context.Context,
-	match *models.RealtimeMatch,
+	matchID string,
 	userID string,
 	envelope interfaces.ActionEnvelope,
 	latency time.Duration,
 ) (ActionResult, error) {
-	if match == nil {
-		return ActionResult{}, ErrActionConflict
-	}
-	if envelope.MatchID != match.ID || strings.TrimSpace(userID) == "" {
+	if envelope.MatchID != matchID || strings.TrimSpace(userID) == "" {
 		return ActionResult{}, ErrActionConflict
 	}
 	payloadHash := shared.HashFields(
@@ -146,17 +144,7 @@ func (s *Service) SubmitAction(
 		userID, envelope.Kind, string(envelope.Payload),
 		fmt.Sprint(envelope.ClientSequence), fmt.Sprint(envelope.ExpectedStateVersion),
 	)
-	if duplicate, err := s.duplicate(
-		ctx, match, userID, envelope, payloadHash,
-	); err == nil {
-		return duplicate, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return ActionResult{}, err
-	}
-	if match.Status != models.MatchLive {
-		return ActionResult{}, ErrActionConflict
-	}
-	lockKey := "game:action:" + match.ID
+	lockKey := "game:action:" + matchID
 	var lockToken string
 	lockDeadline := time.NewTimer(2 * time.Second)
 	defer lockDeadline.Stop()
@@ -170,34 +158,32 @@ func (s *Service) SubmitAction(
 		if locked {
 			break
 		}
-		if duplicate, duplicateErr := s.duplicate(
-			ctx, match, userID, envelope, payloadHash,
-		); duplicateErr == nil {
-			return duplicate, nil
-		} else if !errors.Is(duplicateErr, sql.ErrNoRows) {
-			return ActionResult{}, duplicateErr
-		}
 		select {
 		case <-ctx.Done():
 			return ActionResult{}, ctx.Err()
 		case <-lockDeadline.C:
 			return ActionResult{}, db.ErrRealtimeConflict
-		case <-time.After(5 * time.Millisecond):
+		case <-time.After(2 * time.Millisecond):
 		}
 	}
 	defer s.store.Redis().Unlock(context.Background(), lockKey, lockToken)
 
-	if duplicate, err := s.duplicate(
-		ctx, match, userID, envelope, payloadHash,
-	); err == nil {
-		return duplicate, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return ActionResult{}, err
-	}
-	record, err := s.store.GetGameParticipantState(ctx, match.ID, userID)
+	actionContext, err := s.store.GetGameActionContext(
+		ctx, matchID, userID, envelope.ActionID, envelope.ClientSequence,
+	)
 	if err != nil {
 		return ActionResult{}, err
 	}
+	match := &actionContext.Match
+	if match.Status != models.MatchLive {
+		return ActionResult{}, ErrActionConflict
+	}
+	if actionContext.Receipt != nil {
+		return s.duplicateReceipt(
+			ctx, match, userID, envelope, payloadHash, actionContext.Receipt,
+		)
+	}
+	record := &actionContext.State
 	if envelope.ClientSequence != record.LastClientSequence+1 {
 		return ActionResult{}, ErrActionSequence
 	}
@@ -213,17 +199,17 @@ func (s *Service) SubmitAction(
 		return ActionResult{}, err
 	}
 	receivedAt := s.now().UTC()
-	actionContext := interfaces.ActionContext{
+	runtimeActionContext := interfaces.ActionContext{
 		MatchID: match.ID, ParticipantID: userID, UserID: userID,
 		ServerReceivedAt: receivedAt, Latency: latency,
 		CurrentSequence:     envelope.ClientSequence,
 		CurrentStateVersion: record.StateVersion,
 	}
-	validated, err := runtime.ValidateAction(ctx, actionContext, current, envelope)
+	validated, err := runtime.ValidateAction(ctx, runtimeActionContext, current, envelope)
 	if err != nil {
 		return ActionResult{}, err
 	}
-	transition, err := runtime.ApplyAction(ctx, actionContext, current, validated)
+	transition, err := runtime.ApplyAction(ctx, runtimeActionContext, current, validated)
 	if err != nil {
 		return ActionResult{}, err
 	}
@@ -272,9 +258,18 @@ func (s *Service) SubmitAction(
 		fmt.Sprint(receipt.StateVersionBefore), fmt.Sprint(receipt.StateVersionAfter),
 		string(receipt.Transition), receipt.ServerReceivedAt.Format(time.RFC3339Nano),
 	)
-	committed, events, err := s.store.CommitGameAction(ctx, *record, next, receipt, drafts)
+	committed, events, err := s.store.CommitGameAction(
+		ctx, *record, next, receipt, actionContext.StreamSequence,
+		actionContext.StreamHash, drafts,
+	)
 	if errors.Is(err, db.ErrRealtimeConflict) {
-		return s.duplicate(ctx, match, userID, envelope, payloadHash)
+		duplicate, duplicateErr := s.duplicate(
+			ctx, match, userID, envelope, payloadHash,
+		)
+		if errors.Is(duplicateErr, sql.ErrNoRows) {
+			return ActionResult{}, ErrActionConflict
+		}
+		return duplicate, duplicateErr
 	}
 	if err != nil {
 		return ActionResult{}, err
@@ -287,7 +282,7 @@ func (s *Service) SubmitAction(
 	}
 	result := ActionResult{
 		Receipt: *committed, Snapshot: snapshot, Events: events,
-		Completion: transition.Completion,
+		Completion: transition.Completion, Match: match,
 	}
 	if transition.Completion != nil {
 		outcome, outcomeErr := s.determineOutcome(ctx, runtime, descriptor, match)
@@ -606,6 +601,17 @@ func (s *Service) duplicate(
 	if err != nil {
 		return ActionResult{}, err
 	}
+	return s.duplicateReceipt(ctx, match, userID, envelope, payloadHash, receipt)
+}
+
+func (s *Service) duplicateReceipt(
+	ctx context.Context,
+	match *models.RealtimeMatch,
+	userID string,
+	envelope interfaces.ActionEnvelope,
+	payloadHash string,
+	receipt *models.GameActionReceipt,
+) (ActionResult, error) {
 	if receipt.MatchID != match.ID || receipt.UserID != userID ||
 		receipt.ActionID != envelope.ActionID ||
 		receipt.ClientSequence != envelope.ClientSequence ||

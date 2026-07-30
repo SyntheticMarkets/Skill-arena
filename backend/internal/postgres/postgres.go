@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 type Config struct {
@@ -29,7 +29,7 @@ func Open(ctx context.Context, cfg Config) (*Database, error) {
 	if cfg.URL == "" || !strings.HasPrefix(strings.ToLower(cfg.URL), "postgres") {
 		return nil, errors.New("postgres url is required")
 	}
-	db, err := sql.Open("postgres", cfg.URL)
+	db, err := sql.Open("pgx", cfg.URL)
 	if err != nil {
 		return nil, err
 	}

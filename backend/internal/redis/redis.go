@@ -165,6 +165,13 @@ func (c NetworkClient) client() (*goredis.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Coordination commands do not consume RESP3 push notifications. RESP2
+	// avoids push-processing reads on every lock and rate-limit operation.
+	options.Protocol = 2
+	options.DisableIdentity = true
+	options.PoolSize = 64
+	options.MinIdleConns = 16
+	options.MaxConcurrentDials = 16
 	client := goredis.NewClient(options)
 	existing, loaded := networkClients.LoadOrStore(c.URL, client)
 	if loaded {

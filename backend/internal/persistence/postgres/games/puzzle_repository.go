@@ -10,6 +10,7 @@ import (
 
 	mazegenerator "skill-arena/internal/games/maze/generator"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
 )
 
@@ -297,7 +298,12 @@ WHERE puzzle_id=$1 AND status='preparing'`,
 
 func retryableTransactionError(err error) bool {
 	var pqErr *pq.Error
-	return errors.As(err, &pqErr) && (pqErr.Code == "40001" || pqErr.Code == "40P01")
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == "40001" || pqErr.Code == "40P01"
+	}
+	var pgxErr *pgconn.PgError
+	return errors.As(err, &pgxErr) &&
+		(pgxErr.Code == "40001" || pgxErr.Code == "40P01")
 }
 
 func (r *PuzzleRepository) GetAssignment(ctx context.Context, scopeType, scopeID string) (mazegenerator.Assignment, error) {
@@ -326,6 +332,16 @@ func translateError(err error) error {
 			return fmt.Errorf("%w: %s", mazegenerator.ErrDuplicatePuzzle, pqErr.Constraint)
 		}
 		return fmt.Errorf("%w: %s", mazegenerator.ErrConflict, pqErr.Constraint)
+	}
+	var pgxErr *pgconn.PgError
+	if errors.As(err, &pgxErr) && pgxErr.Code == "23505" {
+		if pgxErr.ConstraintName == "uq_game_puzzle_claims_one_use_seed" ||
+			pgxErr.ConstraintName == "uq_game_puzzle_claims_one_use_hash" {
+			return fmt.Errorf(
+				"%w: %s", mazegenerator.ErrDuplicatePuzzle, pgxErr.ConstraintName,
+			)
+		}
+		return fmt.Errorf("%w: %s", mazegenerator.ErrConflict, pgxErr.ConstraintName)
 	}
 	return err
 }

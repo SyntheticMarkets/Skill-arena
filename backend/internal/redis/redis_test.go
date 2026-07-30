@@ -53,6 +53,31 @@ func TestMemoryLockRequiresOwnerToken(t *testing.T) {
 	}
 }
 
+func TestNetworkClientUsesCoordinationOptimizedPool(t *testing.T) {
+	networkClients = sync.Map{}
+	t.Cleanup(func() { networkClients = sync.Map{} })
+
+	client := NetworkClient{URL: "redis://127.0.0.1:6379/0"}
+	network, err := client.client()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := network.Options()
+	if options.Protocol != 2 {
+		t.Fatalf("protocol = %d, want RESP2", options.Protocol)
+	}
+	if !options.DisableIdentity {
+		t.Fatal("client identity handshake must be disabled")
+	}
+	if options.PoolSize != 64 || options.MinIdleConns != 16 ||
+		options.MaxConcurrentDials != 16 {
+		t.Fatalf(
+			"pool = size:%d idle:%d dials:%d",
+			options.PoolSize, options.MinIdleConns, options.MaxConcurrentDials,
+		)
+	}
+}
+
 func TestNetworkClientIntegration(t *testing.T) {
 	redisURL := os.Getenv("SKILL_ARENA_TEST_REDIS_URL")
 	if redisURL == "" {
