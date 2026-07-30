@@ -52,7 +52,13 @@ describe('Financial wallet', () => {
   it('renders backend balances, lifecycle state, and assessment status', async () => {
     render(<WalletPage />)
     expect(await screen.findByText('Your money, with every stage visible.')).toBeInTheDocument()
-    expect(screen.getByText(/123,45/)).toBeInTheDocument()
+    const formattedBalance = new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency: 'ZAR',
+    }).format(123.45)
+    expect(screen.getByText((_, element) => (
+      element?.tagName === 'STRONG' && element.textContent === formattedBalance
+    ))).toBeInTheDocument()
     expect(screen.getByText('Pending Review')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Assessment' }))
     expect(screen.getByRole('heading', { name: 'Complete' })).toBeInTheDocument()
