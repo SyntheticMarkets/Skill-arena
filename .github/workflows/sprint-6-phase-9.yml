@@ -85,6 +85,7 @@ jobs:
           /tmp/mc mb --ignore-existing phase9/skill-arena-phase9
           /tmp/mc anonymous set none phase9/skill-arena-phase9
       - name: Verify live PostgreSQL, Redis, and object storage
+        if: ${{ !cancelled() }}
         working-directory: backend
         env:
           SKILL_ARENA_TEST_POSTGRES_URL: postgresql://skillarena:phase9-postgres-ci@127.0.0.1:55433/skillarena_phase9?sslmode=disable
@@ -95,10 +96,12 @@ jobs:
           SKILL_ARENA_TEST_S3_SECRET_KEY: phase9-minio-ci-secret
         run: go test ./internal/db ./internal/redis ./internal/storage -count=1 -v -timeout 20m
       - name: Create isolated realtime load database
+        if: ${{ !cancelled() }}
         env:
           PGPASSWORD: phase9-postgres-ci
         run: createdb -h 127.0.0.1 -p 55433 -U skillarena skillarena_phase9_load
       - name: Verify 100 simultaneous live Maze matches
+        if: ${{ !cancelled() }}
         working-directory: backend
         env:
           SKILL_ARENA_PHASE9_LOAD_POSTGRES_URL: postgresql://skillarena:phase9-postgres-ci@127.0.0.1:55433/skillarena_phase9_load?sslmode=disable
@@ -109,14 +112,17 @@ jobs:
           SKILL_ARENA_PHASE9_LOAD_S3_SECRET_KEY: phase9-minio-ci-secret
         run: go test ./internal/realtime -run TestPhase9OneHundredLiveMazeMatches -count=1 -v -timeout 25m
       - name: Verify 100,000-candidate qualification corpus
+        if: ${{ !cancelled() }}
         working-directory: backend
         env:
           SKILL_ARENA_PHASE9_CORPUS_SIZE: "100000"
         run: go test ./internal/games/maze/solver -run TestPhase9LargeQualificationCorpus -count=1 -v -timeout 30m
       - name: Verify native race instrumentation
+        if: ${{ !cancelled() }}
         working-directory: backend
         run: go test -race ./internal/games/maze/... ./internal/realtime ./internal/redis -count=1 -timeout 20m
       - name: Build production images
+        if: ${{ !cancelled() }}
         run: |
           docker build -t skill-arena-backend:phase9 backend
           docker build --build-arg NEXT_PUBLIC_API_BASE_URL=https://api.example.invalid -t skill-arena-frontend:phase9 frontend
@@ -145,6 +151,7 @@ jobs:
           go vet ./...
           go build ./...
           go mod verify
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
       - name: Player platform regression
         working-directory: frontend
         env:
