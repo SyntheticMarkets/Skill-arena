@@ -149,4 +149,23 @@ realtime_matches,users CASCADE`); err != nil {
 	if successes != 1 || conflicts != 1 {
 		t.Fatalf("successes=%d conflicts=%d", successes, conflicts)
 	}
+	var actionEvents int
+	var actionReceipts int
+	var matchSequence int64
+	if err := store.pg.QueryRowContext(ctx, `SELECT
+    (SELECT count(*) FROM realtime_events
+     WHERE match_id=$1 AND type='game.action.processed'),
+    (SELECT count(*) FROM game_action_receipts WHERE match_id=$1),
+    (SELECT sequence FROM realtime_matches WHERE id=$1)`,
+		match.ID,
+	).Scan(&actionEvents, &actionReceipts, &matchSequence); err != nil {
+		t.Fatal(err)
+	}
+	if actionEvents != 2 || actionReceipts != 2 ||
+		matchSequence != concurrentContext.StreamSequence+1 {
+		t.Fatalf(
+			"failed conflict leaked writes: events=%d receipts=%d sequence=%d",
+			actionEvents, actionReceipts, matchSequence,
+		)
+	}
 }

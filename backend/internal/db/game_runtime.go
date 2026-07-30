@@ -435,13 +435,6 @@ func (s *Store) commitGameActionPostgres(
 		return nil, nil, err
 	}
 	defer conn.Close()
-	started = time.Now()
-	tx, err := conn.BeginTx(ctx, nil)
-	observability.ObserveTiming(ctx, "db.game_action_commit.begin", started)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer tx.Rollback()
 	sequence := expectedStreamSequence
 	previous := expectedStreamHash
 	events := make([]models.RealtimeEvent, 0, len(drafts))
@@ -461,7 +454,7 @@ func (s *Store) commitGameActionPostgres(
 	query, args := gameActionPersistenceStatement(
 		events, expectedStreamSequence, sequence, expected, next, receipt,
 	)
-	result, err := tx.ExecContext(ctx, query, args...)
+	result, err := conn.ExecContext(ctx, query, args...)
 	observability.ObserveTiming(ctx, "db.game_action_commit.persist", started)
 	if err != nil {
 		if isPostgresUniqueViolation(err) {
@@ -473,12 +466,6 @@ func (s *Store) commitGameActionPostgres(
 	if affected != 1 {
 		return nil, nil, ErrRealtimeConflict
 	}
-	started = time.Now()
-	if err := tx.Commit(); err != nil {
-		observability.ObserveTiming(ctx, "db.game_action_commit.commit", started)
-		return nil, nil, err
-	}
-	observability.ObserveTiming(ctx, "db.game_action_commit.commit", started)
 	return &receipt, events, nil
 }
 
@@ -528,18 +515,38 @@ func gameActionPersistenceStatement(
 	receiptHash := bind(receipt.ReceiptHash)
 	serverReceivedAt := bind(receipt.ServerReceivedAt)
 	processedAt := bind(receipt.ProcessedAt)
-	query := `WITH event_insert AS (
+	query := `WITH action_guard AS MATERIALIZED (
+    SELECT 1
+    FROM realtime_matches AS guarded_match
+    JOIN game_participant_states AS guarded_state
+      ON guarded_state.match_id=guarded_match.id
+    WHERE guarded_match.id=` + matchID + `
+      AND guarded_match.sequence=` + matchExpectedSequence + `
+      AND guarded_match.status='live'
+      AND guarded_state.match_id=` + stateMatchID + `
+      AND guarded_state.user_id=` + stateUserID + `
+      AND guarded_state.state_version=` + expectedStateVersion + `
+      AND guarded_state.last_client_sequence=` + expectedClientSequence + `
+    FOR UPDATE OF guarded_match,guarded_state
+), event_rows(
+    id,match_id,user_id,type,sequence,state_version,server_time,payload,
+    previous_hash,integrity_hash
+) AS (
+    VALUES ` + eventValues + `
+), event_insert AS (
     INSERT INTO realtime_events(
         id,match_id,user_id,type,sequence,state_version,server_time,payload,
         previous_hash,integrity_hash
     )
-    VALUES ` + eventValues + `
+    SELECT event_rows.id,event_rows.match_id,event_rows.user_id,event_rows.type,
+           event_rows.sequence,event_rows.state_version,event_rows.server_time,
+           event_rows.payload,event_rows.previous_hash,event_rows.integrity_hash
+    FROM event_rows CROSS JOIN action_guard
     RETURNING 1
 ), match_update AS (
     UPDATE realtime_matches SET sequence=` + matchSequence + `,updated_at=` + matchUpdatedAt + `
     WHERE id=` + matchID + `
-      AND sequence=` + matchExpectedSequence + `
-      AND status='live'
+      AND EXISTS (SELECT 1 FROM action_guard)
       AND (SELECT count(*) FROM event_insert)=` + eventCount + `
     RETURNING id
 ), state_update AS (
@@ -550,8 +557,6 @@ func gameActionPersistenceStatement(
     last_server_sequence=` + lastServerSequence + `,status=` + stateStatus + `,
     updated_at=` + stateUpdatedAt + `
     WHERE match_id=` + stateMatchID + ` AND user_id=` + stateUserID + `
-      AND state_version=` + expectedStateVersion + `
-      AND last_client_sequence=` + expectedClientSequence + `
       AND EXISTS (SELECT 1 FROM match_update)
     RETURNING 1
 )
@@ -598,7 +603,16 @@ func gameEventValues(events []models.RealtimeEvent, firstParameter int) (string,
 		for field := range fields {
 			placeholders[field] = fmt.Sprintf("$%d", base+field)
 		}
-		placeholders[2] = "NULLIF(" + placeholders[2] + ",'')"
+		placeholders[0] += "::text"
+		placeholders[1] += "::text"
+		placeholders[2] = "NULLIF(" + placeholders[2] + "::text,'')"
+		placeholders[3] += "::text"
+		placeholders[4] += "::bigint"
+		placeholders[5] += "::bigint"
+		placeholders[6] += "::timestamptz"
+		placeholders[7] += "::jsonb"
+		placeholders[8] += "::text"
+		placeholders[9] += "::text"
 		values[index] = "(" + strings.Join(placeholders, ",") + ")"
 		args = append(args,
 			event.ID, event.MatchID, event.UserID, event.Type, event.Sequence,
