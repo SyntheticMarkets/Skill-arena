@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"skill-arena/internal/db"
@@ -14,6 +15,7 @@ import (
 	"skill-arena/internal/games/shared"
 	"skill-arena/internal/id"
 	"skill-arena/internal/models"
+	"skill-arena/internal/observability"
 )
 
 var (
@@ -24,8 +26,15 @@ var (
 )
 
 type Service struct {
-	store *db.Store
-	now   func() time.Time
+	store       *db.Store
+	actionCache sync.Map
+	streamHeads sync.Map
+	now         func() time.Time
+}
+
+type gameStreamHead struct {
+	Sequence      int64
+	IntegrityHash string
 }
 
 type ActionResult struct {
@@ -119,14 +128,59 @@ func (s *Service) PrepareMatch(ctx context.Context, match *models.RealtimeMatch)
 	if err != nil {
 		return err
 	}
-	_, err = s.store.CreateGameParticipantStates(ctx, states, models.GameEventDraft{
+	events, err := s.store.CreateGameParticipantStates(ctx, states, models.GameEventDraft{
 		Type: "game.puzzle.ready", Payload: payload,
 	})
 	if errors.Is(err, db.ErrRealtimeConflict) {
 		_, loadErr := s.store.GetGameParticipantState(ctx, match.ID, match.Participants[0].UserID)
 		return loadErr
 	}
+	if err == nil && len(events) > 0 {
+		head := events[len(events)-1]
+		s.rememberStream(db.GameActionContext{
+			Match: *match, StreamSequence: head.Sequence, StreamHash: head.IntegrityHash,
+		})
+		for _, state := range states {
+			s.actionCache.Store(
+				gameActionCacheKey(match.ID, state.UserID),
+				db.GameActionContext{
+					Match: *match, State: state,
+					StreamSequence: head.Sequence, StreamHash: head.IntegrityHash,
+				},
+			)
+		}
+	}
 	return err
+}
+
+func (s *Service) ObserveMatchTransition(
+	match *models.RealtimeMatch,
+	event models.RealtimeEvent,
+) {
+	if match == nil || event.MatchID != match.ID {
+		return
+	}
+	s.rememberStream(db.GameActionContext{
+		Match: *match, StreamSequence: event.Sequence, StreamHash: event.IntegrityHash,
+	})
+	for _, participant := range match.Participants {
+		key := gameActionCacheKey(match.ID, participant.UserID)
+		cached, ok := s.actionCache.Load(key)
+		if !ok {
+			continue
+		}
+		actionContext, valid := cached.(db.GameActionContext)
+		if !valid {
+			continue
+		}
+		actionContext.Match = *match
+		actionContext.StreamSequence = event.Sequence
+		actionContext.StreamHash = event.IntegrityHash
+		s.actionCache.Store(key, actionContext)
+	}
+	if terminalMatchStatus(match.Status) {
+		s.streamHeads.Delete(match.ID)
+	}
 }
 
 func (s *Service) SubmitAction(
@@ -144,9 +198,9 @@ func (s *Service) SubmitAction(
 		userID, envelope.Kind, string(envelope.Payload),
 		fmt.Sprint(envelope.ClientSequence), fmt.Sprint(envelope.ExpectedStateVersion),
 	)
-	actionContext, err := s.store.GetGameActionContext(
-		ctx, matchID, userID, envelope.ActionID, envelope.ClientSequence,
-	)
+	stageStarted := time.Now()
+	actionContext, err := s.gameActionContext(ctx, matchID, userID, envelope)
+	observability.ObserveTiming(ctx, "game_action.load", stageStarted)
 	if err != nil {
 		return ActionResult{}, err
 	}
@@ -171,6 +225,7 @@ func (s *Service) SubmitAction(
 		return ActionResult{}, err
 	}
 	var current interfaces.GameState
+	stageStarted = time.Now()
 	if err := json.Unmarshal(record.State, &current); err != nil {
 		return ActionResult{}, err
 	}
@@ -234,22 +289,65 @@ func (s *Service) SubmitAction(
 		fmt.Sprint(receipt.StateVersionBefore), fmt.Sprint(receipt.StateVersionAfter),
 		string(receipt.Transition), receipt.ServerReceivedAt.Format(time.RFC3339Nano),
 	)
-	committed, events, err := s.store.CommitGameAction(
-		ctx, *record, next, receipt, actionContext.StreamSequence,
-		actionContext.StreamHash, drafts,
-	)
-	if errors.Is(err, db.ErrRealtimeConflict) {
-		duplicate, duplicateErr := s.duplicate(
-			ctx, match, userID, envelope, payloadHash,
+	observability.ObserveTiming(ctx, "game_action.compute", stageStarted)
+	stageStarted = time.Now()
+	var committed *models.GameActionReceipt
+	var events []models.RealtimeEvent
+	for attempt := 0; attempt < 3; attempt++ {
+		committed, events, err = s.store.CommitGameAction(
+			ctx, *record, next, receipt, actionContext.StreamSequence,
+			actionContext.StreamHash, drafts,
 		)
-		if errors.Is(duplicateErr, sql.ErrNoRows) {
-			return ActionResult{}, ErrActionConflict
+		if !errors.Is(err, db.ErrRealtimeConflict) {
+			break
 		}
-		return duplicate, duplicateErr
+		s.actionCache.Delete(gameActionCacheKey(matchID, userID))
+		refreshed, refreshErr := s.store.GetGameActionContext(
+			ctx, matchID, userID, envelope.ActionID, envelope.ClientSequence,
+		)
+		if refreshErr != nil {
+			err = refreshErr
+			break
+		}
+		if refreshed.Receipt != nil {
+			observability.ObserveTiming(ctx, "game_action.commit", stageStarted)
+			return s.duplicateReceipt(
+				ctx, &refreshed.Match, userID, envelope, payloadHash, refreshed.Receipt,
+			)
+		}
+		if refreshed.Match.Status != models.MatchLive ||
+			refreshed.State.StateVersion != record.StateVersion ||
+			refreshed.State.LastClientSequence != record.LastClientSequence {
+			err = db.ErrRealtimeConflict
+			break
+		}
+		actionContext = refreshed
+		match = &actionContext.Match
+	}
+	observability.ObserveTiming(ctx, "game_action.commit", stageStarted)
+	if errors.Is(err, db.ErrRealtimeConflict) {
+		return ActionResult{}, ErrActionConflict
 	}
 	if err != nil {
 		return ActionResult{}, err
 	}
+	match.Sequence = events[len(events)-1].Sequence
+	match.UpdatedAt = next.UpdatedAt
+	s.rememberStream(
+		db.GameActionContext{
+			Match: *match, StreamSequence: match.Sequence,
+			StreamHash: events[len(events)-1].IntegrityHash,
+		},
+	)
+	s.actionCache.Store(
+		gameActionCacheKey(matchID, userID),
+		db.GameActionContext{
+			Match: *match, State: next,
+			StreamSequence: match.Sequence,
+			StreamHash:     events[len(events)-1].IntegrityHash,
+		},
+	)
+	stageStarted = time.Now()
 	snapshot, err := runtime.Snapshot(ctx, interfaces.ViewerContext{
 		MatchID: match.ID, UserID: userID, ParticipantID: userID, Role: "player",
 	}, transition.NextState)
@@ -261,13 +359,95 @@ func (s *Service) SubmitAction(
 		Completion: transition.Completion, Match: match,
 	}
 	if transition.Completion != nil {
+		for _, participant := range match.Participants {
+			s.actionCache.Delete(gameActionCacheKey(matchID, participant.UserID))
+		}
 		outcome, outcomeErr := s.determineOutcome(ctx, runtime, descriptor, match)
 		if outcomeErr != nil {
 			return ActionResult{}, outcomeErr
 		}
 		result.Outcome = &outcome
 	}
+	observability.ObserveTiming(ctx, "game_action.post_commit", stageStarted)
 	return result, nil
+}
+
+func (s *Service) gameActionContext(
+	ctx context.Context,
+	matchID, userID string,
+	envelope interfaces.ActionEnvelope,
+) (db.GameActionContext, error) {
+	key := gameActionCacheKey(matchID, userID)
+	if cached, ok := s.actionCache.Load(key); ok {
+		actionContext, valid := cached.(db.GameActionContext)
+		if valid &&
+			actionContext.Match.Status == models.MatchLive &&
+			envelope.ClientSequence == actionContext.State.LastClientSequence+1 &&
+			envelope.ExpectedStateVersion == actionContext.State.StateVersion {
+			s.applyCachedStream(&actionContext)
+			return actionContext, nil
+		}
+	}
+	actionContext, err := s.store.GetGameActionContext(
+		ctx, matchID, userID, envelope.ActionID, envelope.ClientSequence,
+	)
+	if err != nil {
+		return db.GameActionContext{}, err
+	}
+	if actionContext.Receipt == nil && actionContext.Match.Status == models.MatchLive {
+		s.rememberStream(actionContext)
+		s.actionCache.Store(key, actionContext)
+	}
+	return actionContext, nil
+}
+
+func gameActionCacheKey(matchID, userID string) string {
+	return matchID + "\x1f" + userID
+}
+
+func (s *Service) applyCachedStream(actionContext *db.GameActionContext) {
+	cached, ok := s.streamHeads.Load(actionContext.Match.ID)
+	if !ok {
+		return
+	}
+	head, valid := cached.(gameStreamHead)
+	if !valid || head.Sequence <= actionContext.StreamSequence {
+		return
+	}
+	actionContext.Match.Sequence = head.Sequence
+	actionContext.StreamSequence = head.Sequence
+	actionContext.StreamHash = head.IntegrityHash
+}
+
+func (s *Service) rememberStream(actionContext db.GameActionContext) {
+	next := gameStreamHead{
+		Sequence: actionContext.StreamSequence, IntegrityHash: actionContext.StreamHash,
+	}
+	for {
+		cached, ok := s.streamHeads.Load(actionContext.Match.ID)
+		if !ok {
+			if _, loaded := s.streamHeads.LoadOrStore(actionContext.Match.ID, next); !loaded {
+				return
+			}
+			continue
+		}
+		head, valid := cached.(gameStreamHead)
+		if valid && head.Sequence >= next.Sequence {
+			return
+		}
+		if s.streamHeads.CompareAndSwap(actionContext.Match.ID, cached, next) {
+			return
+		}
+	}
+}
+
+func terminalMatchStatus(status string) bool {
+	switch status {
+	case models.MatchCompleted, models.MatchCancelled, models.MatchAbandoned:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) Sync(

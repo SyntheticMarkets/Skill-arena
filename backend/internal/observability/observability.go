@@ -1,11 +1,35 @@
 package observability
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"sync"
 	"time"
 )
+
+type timingRecorderKey struct{}
+
+type TimingRecorder interface {
+	ObserveTiming(name string, duration time.Duration)
+}
+
+func WithTimingRecorder(ctx context.Context, recorder TimingRecorder) context.Context {
+	if recorder == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, timingRecorderKey{}, recorder)
+}
+
+func ObserveTiming(ctx context.Context, name string, started time.Time) {
+	if ctx == nil {
+		return
+	}
+	recorder, ok := ctx.Value(timingRecorderKey{}).(TimingRecorder)
+	if ok {
+		recorder.ObserveTiming(name, time.Since(started))
+	}
+}
 
 type Logger struct {
 	Service string

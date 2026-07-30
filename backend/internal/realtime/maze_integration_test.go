@@ -130,6 +130,49 @@ func TestMazePracticeLifecycleIsAuthoritativeIdempotentAndReplayable(t *testing.
 	}
 }
 
+func TestMazeCachedActionStateCannotBypassMatchStatus(t *testing.T) {
+	ctx := context.Background()
+	store, err := db.New(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close(context.Background()) })
+	player := createRealtimeUser(t, store, "maze-cache-authority@example.com")
+	service := NewService(store)
+	_, match, err := service.Queue(ctx, player.ID, QueueRequest{
+		GameID: maze.ModuleID, Mode: "practice", WalletCategory: "practice",
+		Region: "global", Jurisdiction: "ZA", LatencyMS: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if match, err = service.Ready(ctx, player.ID, match.ID); err != nil {
+		t.Fatal(err)
+	}
+	initial := loadMazeEngineState(t, store, match.ID, player.ID)
+	blocked := mazeAction(match.ID, "cache-prime", blockedArrow(t, initial), 1, 0)
+	if _, err := service.GameAction(ctx, player.ID, match.ID, blocked, 8*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Disconnect(ctx, player.ID, "session", "connection", match.ID); err != nil {
+		t.Fatal(err)
+	}
+	solverInstance, err := solver.New(solver.Config{Version: 1, MaxArrows: 2048})
+	if err != nil {
+		t.Fatal(err)
+	}
+	solution, err := solverInstance.Solve(ctx, initial.Board, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := mazeAction(match.ID, "while-reconnecting", solution.Steps[0].ArrowID, 2, 0)
+	if _, err := service.GameAction(
+		ctx, player.ID, match.ID, action, 8*time.Millisecond,
+	); !errors.Is(err, gamesession.ErrActionConflict) {
+		t.Fatalf("action while reconnecting error = %v", err)
+	}
+}
+
 func TestMazeConcurrentActionRetriesCommitOneTransition(t *testing.T) {
 	ctx := context.Background()
 	store, err := db.New(ctx, t.TempDir())

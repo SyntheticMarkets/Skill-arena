@@ -177,6 +177,125 @@ func (s *Store) SaveRealtimeMatch(ctx context.Context, match models.RealtimeMatc
 	return cloneRealtimeMatch(&match), nil
 }
 
+func (s *Store) TransitionRealtimeMatch(
+	ctx context.Context,
+	match models.RealtimeMatch,
+	expectedVersion int64,
+	userID, eventType string,
+	payload json.RawMessage,
+) (*models.RealtimeMatch, *models.RealtimeEvent, error) {
+	if len(payload) == 0 {
+		payload = json.RawMessage(`{}`)
+	}
+	if s.pg != nil {
+		tx, err := s.pg.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer tx.Rollback()
+		var sequence int64
+		var previous string
+		err = tx.QueryRowContext(ctx, `SELECT m.sequence,
+COALESCE((SELECT integrity_hash FROM realtime_events
+          WHERE match_id=m.id ORDER BY sequence DESC LIMIT 1),'')
+FROM realtime_matches m WHERE m.id=$1 AND m.state_version=$2 FOR UPDATE`,
+			match.ID, expectedVersion).Scan(&sequence, &previous)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, ErrRealtimeConflict
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		match.StateVersion = expectedVersion + 1
+		event := s.newRealtimeEvent(
+			match.ID, userID, eventType, sequence+1, match.StateVersion, payload, previous,
+		)
+		match.Sequence = event.Sequence
+		match.UpdatedAt = event.ServerTime
+		state, err := json.Marshal(match)
+		if err != nil {
+			return nil, nil, err
+		}
+		checksum := sha256.Sum256(state)
+		result, err := tx.ExecContext(ctx, `WITH event_insert AS (
+    INSERT INTO realtime_events(
+        id,match_id,user_id,type,sequence,state_version,server_time,payload,
+        previous_hash,integrity_hash
+    )
+    VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10)
+    RETURNING 1
+), match_update AS (
+    UPDATE realtime_matches SET
+        status=$11,state_version=$12,sequence=$13,updated_at=$14,
+        started_at=$15,completed_at=$16
+    WHERE id=$17 AND state_version=$18
+      AND EXISTS (SELECT 1 FROM event_insert)
+    RETURNING 1
+)
+INSERT INTO realtime_snapshots(match_id,version,sequence,state,checksum,created_at)
+SELECT $19,$20,$21,$22,$23,$24
+FROM match_update
+ON CONFLICT(match_id,version) DO NOTHING`,
+			event.ID, event.MatchID, event.UserID, event.Type, event.Sequence,
+			event.StateVersion, event.ServerTime, event.Payload, event.PreviousHash,
+			event.IntegrityHash, match.Status, match.StateVersion, match.Sequence,
+			match.UpdatedAt, match.StartedAt, match.CompletedAt, match.ID,
+			expectedVersion, match.ID, match.StateVersion, match.Sequence, state,
+			hex.EncodeToString(checksum[:]), time.Now().UTC(),
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		affected, _ := result.RowsAffected()
+		if affected != 1 {
+			return nil, nil, ErrRealtimeConflict
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, nil, err
+		}
+		return cloneRealtimeMatch(&match), &event, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := s.realtimeMatches[match.ID]
+	if current == nil {
+		return nil, nil, sql.ErrNoRows
+	}
+	if current.StateVersion != expectedVersion {
+		return nil, nil, ErrRealtimeConflict
+	}
+	match.StateVersion = expectedVersion + 1
+	match.Participants = append([]models.RealtimeParticipant(nil), current.Participants...)
+	events := s.realtimeEvents[match.ID]
+	previous := ""
+	if len(events) > 0 {
+		previous = events[len(events)-1].IntegrityHash
+	}
+	event := s.newRealtimeEvent(
+		match.ID, userID, eventType, current.Sequence+1, match.StateVersion,
+		payload, previous,
+	)
+	match.Sequence = event.Sequence
+	match.UpdatedAt = event.ServerTime
+	s.realtimeMatches[match.ID] = cloneRealtimeMatch(&match)
+	s.realtimeEvents[match.ID] = append(events, event)
+	state, err := json.Marshal(match)
+	if err != nil {
+		return nil, nil, err
+	}
+	checksum := sha256.Sum256(state)
+	s.realtimeSnapshots[match.ID] = append(
+		s.realtimeSnapshots[match.ID],
+		models.RealtimeSnapshot{
+			MatchID: match.ID, Version: match.StateVersion, Sequence: match.Sequence,
+			State: state, Checksum: hex.EncodeToString(checksum[:]),
+			CreatedAt: time.Now().UTC(),
+		},
+	)
+	return cloneRealtimeMatch(&match), &event, nil
+}
+
 func (s *Store) SaveRealtimeParticipant(ctx context.Context, p models.RealtimeParticipant) error {
 	if s.pg != nil {
 		_, err := s.pg.ExecContext(ctx, `INSERT INTO realtime_participants

@@ -14,6 +14,7 @@ import (
 	"skill-arena/internal/games/maze"
 	"skill-arena/internal/games/maze/solver"
 	"skill-arena/internal/models"
+	"skill-arena/internal/observability"
 )
 
 func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
@@ -30,6 +31,8 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Minute)
 	defer cancel()
+	timings := &phase9TimingRecorder{values: map[string][]time.Duration{}}
+	ctx = observability.WithTimingRecorder(ctx, timings)
 	const matchCount = 100
 	store, err := db.NewWithOptions(ctx, db.Options{
 		DatabaseURL: databaseURL, RedisURL: redisURL, Environment: "production",
@@ -114,7 +117,6 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 	if len(paired) != matchCount || len(seenPlayers) != matchCount*2 {
 		t.Fatalf("matches=%d players=%d", len(paired), len(seenPlayers))
 	}
-
 	actionLatencies := make([]time.Duration, 0, matchCount*40)
 	ordinaryActionLatencies := make([]time.Duration, 0, matchCount*40)
 	completionActionLatencies := make([]time.Duration, 0, matchCount)
@@ -238,6 +240,13 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 		len(paired), len(actionLatencies), prepP99, actionP95, actionP99,
 		ordinaryActionP95, ordinaryActionP99, completionActionP95, reconnectP95,
 	)
+	for _, name := range timings.names() {
+		t.Logf(
+			"component=%s count=%d p50=%s p95=%s p99=%s",
+			name, timings.count(name), timings.quantile(name, 50),
+			timings.quantile(name, 95), timings.quantile(name, 99),
+		)
+	}
 	if prepP99 > 5*time.Second {
 		t.Fatalf("match preparation p99 %s exceeds 5s", prepP99)
 	}
@@ -247,6 +256,41 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 	if reconnectP95 > 250*time.Millisecond {
 		t.Fatalf("reconnect p95 %s exceeds 250ms", reconnectP95)
 	}
+}
+
+type phase9TimingRecorder struct {
+	mu     sync.Mutex
+	values map[string][]time.Duration
+}
+
+func (r *phase9TimingRecorder) ObserveTiming(name string, duration time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.values[name] = append(r.values[name], duration)
+}
+
+func (r *phase9TimingRecorder) names() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	names := make([]string, 0, len(r.values))
+	for name := range r.values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (r *phase9TimingRecorder) count(name string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.values[name])
+}
+
+func (r *phase9TimingRecorder) quantile(name string, percentile int) time.Duration {
+	r.mu.Lock()
+	values := append([]time.Duration(nil), r.values[name]...)
+	r.mu.Unlock()
+	return phase9Quantile(values, percentile)
 }
 
 func phase9LoadEmail(group string, index int) string {

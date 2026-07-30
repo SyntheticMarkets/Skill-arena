@@ -70,4 +70,19 @@ func TestPostgresRealtimeRepository(t *testing.T) {
 	if err != nil || metrics.OnlinePlayers != 1 || metrics.QueuedPlayers != 1 || metrics.MatchesCreated != 1 {
 		t.Fatalf("metrics=%+v err=%v", metrics, err)
 	}
+	transition := *created
+	transition.Status = models.MatchWaiting
+	saved, transitionEvent, err := store.TransitionRealtimeMatch(
+		ctx, transition, created.StateVersion, user.ID, "match_waiting",
+		json.RawMessage(`{"reason":"integration"}`),
+	)
+	if err != nil || saved.StateVersion != created.StateVersion+1 ||
+		saved.Sequence != event.Sequence+1 || transitionEvent.Sequence != saved.Sequence {
+		t.Fatalf("transition match=%+v event=%+v err=%v", saved, transitionEvent, err)
+	}
+	latest, err := store.LatestRealtimeSnapshot(ctx, match.ID)
+	if err != nil || latest.Version != saved.StateVersion ||
+		latest.Sequence != saved.Sequence || latest.Checksum == "" {
+		t.Fatalf("transition snapshot=%+v err=%v", latest, err)
+	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/lib/pq"
 
 	"skill-arena/internal/models"
+	"skill-arena/internal/observability"
 )
 
 func gameStateKey(matchID, userID string) string {
@@ -227,6 +228,7 @@ func (s *Store) GetGameActionContext(
 	clientSequence int64,
 ) (GameActionContext, error) {
 	if s.pg != nil {
+		started := time.Now()
 		var result GameActionContext
 		var receiptJSON []byte
 		err := s.pg.QueryRowContext(ctx, `SELECT
@@ -235,6 +237,10 @@ m.mode,m.status,m.region,m.wallet_category,m.seed_reference,m.state_version,m.se
 m.created_at,m.updated_at,m.started_at,m.completed_at,
 s.match_id,s.user_id,s.game_id,s.puzzle_id,s.state_schema_version,s.state_version,
 s.state,s.state_checksum,s.last_client_sequence,s.last_server_sequence,s.status,s.updated_at,
+COALESCE((
+    SELECT integrity_hash FROM realtime_events e
+    WHERE e.match_id=m.id ORDER BY e.sequence DESC LIMIT 1
+),''),
 COALESCE((
     SELECT jsonb_build_object(
         'actionId',r.action_id,'matchId',r.match_id,'userId',r.user_id,
@@ -272,8 +278,10 @@ WHERE s.match_id=$1 AND s.user_id=$2`,
 			&result.State.PuzzleID, &result.State.StateSchema, &result.State.StateVersion,
 			&result.State.State, &result.State.StateChecksum,
 			&result.State.LastClientSequence, &result.State.LastServerSequence,
-			&result.State.Status, &result.State.UpdatedAt, &receiptJSON,
+			&result.State.Status, &result.State.UpdatedAt, &result.StreamHash,
+			&receiptJSON,
 		)
+		observability.ObserveTiming(ctx, "db.game_action_context.query", started)
 		if err != nil {
 			return GameActionContext{}, err
 		}
@@ -416,25 +424,19 @@ func (s *Store) commitGameActionPostgres(
 	ctx context.Context,
 	expected, next models.GameParticipantState,
 	receipt models.GameActionReceipt,
-	_ int64,
-	_ string,
+	expectedStreamSequence int64,
+	expectedStreamHash string,
 	drafts []models.GameEventDraft,
 ) (*models.GameActionReceipt, []models.RealtimeEvent, error) {
+	started := time.Now()
 	tx, err := s.pg.BeginTx(ctx, nil)
+	observability.ObserveTiming(ctx, "db.game_action_commit.begin", started)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer tx.Rollback()
-	var sequence int64
-	var previous string
-	err = tx.QueryRowContext(ctx, `SELECT m.sequence,
-COALESCE((SELECT integrity_hash FROM realtime_events
-          WHERE match_id=m.id ORDER BY sequence DESC LIMIT 1),'')
-FROM realtime_matches m WHERE m.id=$1 FOR UPDATE`, expected.MatchID).
-		Scan(&sequence, &previous)
-	if err != nil {
-		return nil, nil, err
-	}
+	sequence := expectedStreamSequence
+	previous := expectedStreamHash
 	events := make([]models.RealtimeEvent, 0, len(drafts))
 	for _, draft := range drafts {
 		sequence++
@@ -448,43 +450,12 @@ FROM realtime_matches m WHERE m.id=$1 FOR UPDATE`, expected.MatchID).
 	next.LastServerSequence = events[len(events)-1].Sequence
 	receipt.FirstEventSequence = events[0].Sequence
 	receipt.LastEventSequence = events[len(events)-1].Sequence
-	if err := insertGameEvents(ctx, tx, events); err != nil {
-		if isPostgresUniqueViolation(err) {
-			return nil, nil, ErrRealtimeConflict
-		}
-		return nil, nil, err
-	}
-	result, err := tx.ExecContext(ctx, `WITH match_update AS (
-    UPDATE realtime_matches SET sequence=$1,updated_at=$2
-    WHERE id=$3
-    RETURNING id
-), state_update AS (
-    UPDATE game_participant_states SET
-    state_schema_version=$4,state_version=$5,state=$6,state_checksum=$7,
-    last_client_sequence=$8,last_server_sequence=$9,status=$10,updated_at=$11
-    WHERE match_id=$12 AND user_id=$13 AND state_version=$14
-      AND last_client_sequence=$15
-      AND EXISTS (SELECT 1 FROM match_update)
-    RETURNING 1
-)
-INSERT INTO game_action_receipts(
-action_id,match_id,user_id,client_sequence,expected_state_version,action_kind,
-action_payload_hash,accepted,result_code,state_version_before,state_version_after,
-first_event_sequence,last_event_sequence,transition,receipt_hash,server_received_at,processed_at)
-SELECT $16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
-FROM state_update`,
-		sequence, time.Now().UTC(), expected.MatchID,
-		next.StateSchema, next.StateVersion, next.State,
-		next.StateChecksum, next.LastClientSequence, next.LastServerSequence,
-		next.Status, next.UpdatedAt, next.MatchID, next.UserID,
-		expected.StateVersion, expected.LastClientSequence,
-		receipt.ActionID, receipt.MatchID, receipt.UserID, receipt.ClientSequence,
-		receipt.ExpectedStateVersion, receipt.ActionKind, receipt.ActionPayloadHash,
-		receipt.Accepted, receipt.ResultCode, receipt.StateVersionBefore,
-		receipt.StateVersionAfter, receipt.FirstEventSequence, receipt.LastEventSequence,
-		receipt.Transition, receipt.ReceiptHash, receipt.ServerReceivedAt,
-		receipt.ProcessedAt,
+	started = time.Now()
+	query, args := gameActionPersistenceStatement(
+		events, expectedStreamSequence, sequence, expected, next, receipt,
 	)
+	result, err := tx.ExecContext(ctx, query, args...)
+	observability.ObserveTiming(ctx, "db.game_action_commit.persist", started)
 	if err != nil {
 		if isPostgresUniqueViolation(err) {
 			return nil, nil, ErrRealtimeConflict
@@ -495,10 +466,100 @@ FROM state_update`,
 	if affected != 1 {
 		return nil, nil, ErrRealtimeConflict
 	}
+	started = time.Now()
 	if err := tx.Commit(); err != nil {
+		observability.ObserveTiming(ctx, "db.game_action_commit.commit", started)
 		return nil, nil, err
 	}
+	observability.ObserveTiming(ctx, "db.game_action_commit.commit", started)
 	return &receipt, events, nil
+}
+
+func gameActionPersistenceStatement(
+	events []models.RealtimeEvent,
+	expectedSequence int64,
+	sequence int64,
+	expected, next models.GameParticipantState,
+	receipt models.GameActionReceipt,
+) (string, []any) {
+	eventValues, args := gameEventValues(events, 1)
+	bind := func(value any) string {
+		args = append(args, value)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	eventCount := bind(len(events))
+	matchSequence := bind(sequence)
+	matchUpdatedAt := bind(time.Now().UTC())
+	matchID := bind(expected.MatchID)
+	matchExpectedSequence := bind(expectedSequence)
+	stateSchema := bind(next.StateSchema)
+	stateVersion := bind(next.StateVersion)
+	state := bind(next.State)
+	stateChecksum := bind(next.StateChecksum)
+	lastClientSequence := bind(next.LastClientSequence)
+	lastServerSequence := bind(next.LastServerSequence)
+	stateStatus := bind(next.Status)
+	stateUpdatedAt := bind(next.UpdatedAt)
+	stateMatchID := bind(next.MatchID)
+	stateUserID := bind(next.UserID)
+	expectedStateVersion := bind(expected.StateVersion)
+	expectedClientSequence := bind(expected.LastClientSequence)
+	actionID := bind(receipt.ActionID)
+	receiptMatchID := bind(receipt.MatchID)
+	receiptUserID := bind(receipt.UserID)
+	clientSequence := bind(receipt.ClientSequence)
+	receiptExpectedVersion := bind(receipt.ExpectedStateVersion)
+	actionKind := bind(receipt.ActionKind)
+	actionPayloadHash := bind(receipt.ActionPayloadHash)
+	accepted := bind(receipt.Accepted)
+	resultCode := bind(receipt.ResultCode)
+	stateVersionBefore := bind(receipt.StateVersionBefore)
+	stateVersionAfter := bind(receipt.StateVersionAfter)
+	firstEventSequence := bind(receipt.FirstEventSequence)
+	lastEventSequence := bind(receipt.LastEventSequence)
+	transition := bind(receipt.Transition)
+	receiptHash := bind(receipt.ReceiptHash)
+	serverReceivedAt := bind(receipt.ServerReceivedAt)
+	processedAt := bind(receipt.ProcessedAt)
+	query := `WITH event_insert AS (
+    INSERT INTO realtime_events(
+        id,match_id,user_id,type,sequence,state_version,server_time,payload,
+        previous_hash,integrity_hash
+    )
+    VALUES ` + eventValues + `
+    RETURNING 1
+), match_update AS (
+    UPDATE realtime_matches SET sequence=` + matchSequence + `,updated_at=` + matchUpdatedAt + `
+    WHERE id=` + matchID + `
+      AND sequence=` + matchExpectedSequence + `
+      AND status='live'
+      AND (SELECT count(*) FROM event_insert)=` + eventCount + `
+    RETURNING id
+), state_update AS (
+    UPDATE game_participant_states SET
+    state_schema_version=` + stateSchema + `,state_version=` + stateVersion + `,
+    state=` + state + `,state_checksum=` + stateChecksum + `,
+    last_client_sequence=` + lastClientSequence + `,
+    last_server_sequence=` + lastServerSequence + `,status=` + stateStatus + `,
+    updated_at=` + stateUpdatedAt + `
+    WHERE match_id=` + stateMatchID + ` AND user_id=` + stateUserID + `
+      AND state_version=` + expectedStateVersion + `
+      AND last_client_sequence=` + expectedClientSequence + `
+      AND EXISTS (SELECT 1 FROM match_update)
+    RETURNING 1
+)
+INSERT INTO game_action_receipts(
+action_id,match_id,user_id,client_sequence,expected_state_version,action_kind,
+action_payload_hash,accepted,result_code,state_version_before,state_version_after,
+first_event_sequence,last_event_sequence,transition,receipt_hash,server_received_at,processed_at)
+SELECT ` + strings.Join([]string{
+		actionID, receiptMatchID, receiptUserID, clientSequence,
+		receiptExpectedVersion, actionKind, actionPayloadHash, accepted, resultCode,
+		stateVersionBefore, stateVersionAfter, firstEventSequence, lastEventSequence,
+		transition, receiptHash, serverReceivedAt, processedAt,
+	}, ",") + `
+FROM state_update`
+	return query, args
 }
 
 func isPostgresUniqueViolation(err error) bool {
@@ -513,11 +574,19 @@ func insertGameEvents(
 	tx *sql.Tx,
 	events []models.RealtimeEvent,
 ) error {
+	values, args := gameEventValues(events, 1)
+	_, err := tx.ExecContext(ctx, `INSERT INTO realtime_events(
+id,match_id,user_id,type,sequence,state_version,server_time,payload,previous_hash,integrity_hash)
+VALUES `+values, args...)
+	return err
+}
+
+func gameEventValues(events []models.RealtimeEvent, firstParameter int) (string, []any) {
 	const fields = 10
 	values := make([]string, len(events))
 	args := make([]any, 0, len(events)*fields)
 	for index, event := range events {
-		base := index*fields + 1
+		base := firstParameter + index*fields
 		placeholders := make([]string, fields)
 		for field := range fields {
 			placeholders[field] = fmt.Sprintf("$%d", base+field)
@@ -530,10 +599,7 @@ func insertGameEvents(
 			event.IntegrityHash,
 		)
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO realtime_events(
-id,match_id,user_id,type,sequence,state_version,server_time,payload,previous_hash,integrity_hash)
-VALUES `+strings.Join(values, ","), args...)
-	return err
+	return strings.Join(values, ","), args
 }
 
 func insertGameActionReceipt(ctx context.Context, tx *sql.Tx, receipt models.GameActionReceipt) error {
@@ -569,7 +635,7 @@ func (s *Store) commitGameActionMemory(
 		return nil, nil, ErrRealtimeConflict
 	}
 	match := s.realtimeMatches[expected.MatchID]
-	if match == nil {
+	if match == nil || match.Status != models.MatchLive {
 		return nil, nil, ErrRealtimeConflict
 	}
 	events := s.realtimeEvents[expected.MatchID]

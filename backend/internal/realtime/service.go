@@ -17,6 +17,7 @@ import (
 	gamesession "skill-arena/internal/games/session"
 	"skill-arena/internal/id"
 	"skill-arena/internal/models"
+	"skill-arena/internal/observability"
 )
 
 var (
@@ -437,7 +438,9 @@ func (s *Service) Disconnect(ctx context.Context, userID, sessionID, connectionI
 }
 
 func (s *Service) Reconnect(ctx context.Context, userID, matchID string, afterSequence int64) (*models.RealtimeMatch, []models.RealtimeEvent, error) {
+	stageStarted := time.Now()
 	match, participant, err := s.participant(ctx, userID, matchID)
+	observability.ObserveTiming(ctx, "reconnect.participant", stageStarted)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -447,17 +450,25 @@ func (s *Service) Reconnect(ctx context.Context, userID, matchID string, afterSe
 	}
 	participant.Status, participant.LastSeenAt = "connected", time.Now().UTC()
 	participant.LastSequence = afterSequence
+	stageStarted = time.Now()
 	if err := s.store.SaveRealtimeParticipant(ctx, *participant); err != nil {
 		return nil, nil, err
 	}
+	observability.ObserveTiming(ctx, "reconnect.save_participant", stageStarted)
 	if match.Status == models.MatchReconnecting || match.Status == models.MatchPaused {
+		stageStarted = time.Now()
 		match, err = s.transition(ctx, match, models.MatchLive, userID, "participant_reconnected", nil)
+		observability.ObserveTiming(ctx, "reconnect.transition", stageStarted)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
+	stageStarted = time.Now()
 	_ = s.setPresence(ctx, userID, models.PresenceInMatch, "", "", matchID, participant.Region)
+	observability.ObserveTiming(ctx, "reconnect.presence", stageStarted)
+	stageStarted = time.Now()
 	events, err := s.store.RealtimeEventsAfter(ctx, matchID, afterSequence, 500)
+	observability.ObserveTiming(ctx, "reconnect.events", stageStarted)
 	return match, events, err
 }
 
@@ -606,27 +617,15 @@ func (s *Service) transition(ctx context.Context, match *models.RealtimeMatch, t
 		now := time.Now().UTC()
 		match.CompletedAt = &now
 	}
-	saved, err := s.store.SaveRealtimeMatch(ctx, *match, match.StateVersion)
-	if err != nil {
-		return nil, err
-	}
 	raw, _ := json.Marshal(payload)
-	event, err := s.store.AppendRealtimeEvent(ctx, saved.ID, userID, eventType, raw)
+	saved, event, err := s.store.TransitionRealtimeMatch(
+		ctx, *match, match.StateVersion, userID, eventType, raw,
+	)
 	if err != nil {
 		return nil, err
 	}
-	saved.Sequence = event.Sequence
-	saved.UpdatedAt = event.ServerTime
-	state, err := json.Marshal(saved)
-	if err != nil {
-		return nil, err
-	}
-	sum := sha256.Sum256(state)
-	if err := s.store.SaveRealtimeSnapshot(ctx, models.RealtimeSnapshot{
-		MatchID: saved.ID, Version: saved.StateVersion, Sequence: saved.Sequence,
-		State: state, Checksum: hex.EncodeToString(sum[:]), CreatedAt: time.Now().UTC(),
-	}); err != nil {
-		return nil, err
+	if s.games != nil {
+		s.games.ObserveMatchTransition(saved, *event)
 	}
 	return saved, nil
 }
