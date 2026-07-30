@@ -8222,6 +8222,62 @@ receipt integrity.
 
 No Sprint 6 freeze tag was created.
 
+###### Storage Versus PostgreSQL Contention Pass 4
+
+Validation date: 2026-07-31
+
+Decision: **CHANGES REQUIRED**
+
+This pass enabled PostgreSQL `track_io_timing` and `track_wal_io_timing`, added
+checkpointer and I/O attribution, and ran `pg_test_fsync` against the same
+container storage used by the unchanged 100-match workload.
+
+Evidence:
+
+- Commit: `9ee4c27e4b1298595683bc4b0ed3897bc513feb`.
+- Workflow:
+  `https://github.com/SyntheticMarkets/Skill-arena/actions/runs/30590170688`.
+- PostgreSQL `17.10`, `synchronous_commit=on`, `full_page_writes=on`, and
+  `wal_sync_method=fdatasync`.
+- Independent storage `fsync`: approximately `14,087-14,537` operations per
+  second, or `69-71 us` per operation.
+- PostgreSQL recorded `2,168` WAL syncs consuming `4,042.282 ms`, an average of
+  approximately `1.86 ms` per sync.
+- The workload generated `40,969,573` WAL bytes, `147,819` WAL records, and
+  `211` full-page images. No checkpoint, deadlock, temporary file, or WAL-buffer
+  exhaustion occurred during the measured interval.
+- Connection acquisition remained negligible at `2.835 us` P95 with zero pool
+  waits.
+- Active-backend sampling continued to show concentrated PostgreSQL internal
+  contention: `BufferContent` (`1,287` observations), `WALWrite` (`1,198`),
+  lock manager (`299`), `WALInsert` (`291`), and relation extension (`235`).
+
+Latest latency:
+
+| Operation | Measured | Target | Result |
+|---|---:|---:|---|
+| Match preparation P99 | `1.043 s` | `< 5 s` | PASS |
+| Accepted action P95 | `294.664 ms` | `< 50 ms` | FAIL |
+| Accepted action P99 | `636.562 ms` | `< 100 ms` | FAIL |
+| Ordinary action P95 | `249.075 ms` | diagnostic | NOT A GATE |
+| Ordinary action P99 | `428.395 ms` | diagnostic | NOT A GATE |
+| Completion action P95 | `1.293 s` | diagnostic | NOT A GATE |
+| Reconnect P95 | `420.531 ms` | `< 250 ms` | FAIL |
+
+Conclusion for the GitHub Linux reference environment: raw storage fsync latency
+is not the primary cause of the action tail. The dominant measured contribution
+is PostgreSQL internal contention created by many concurrent, independently
+durable transactions. Target-production storage must still be validated, but
+further gameplay-engine or connection-pool tuning is not supported by the
+evidence. The next controlled experiment is durable group-commit configuration
+or a repository-level durable batching design. Any option must retain
+`synchronous_commit=on`, atomic receipts, event ordering, replay integrity, and
+fail-closed acknowledgement semantics.
+
+Full backend, Player Platform, Admin CRM, deterministic-vector, corpus, native
+race, live infrastructure, and production-image validations passed. Only the
+documented latency gate failed. No Sprint 6 freeze tag was created.
+
 ##### Remaining Freeze Gates
 
 **High**
