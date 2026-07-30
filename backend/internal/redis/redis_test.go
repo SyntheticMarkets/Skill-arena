@@ -69,8 +69,8 @@ func TestNetworkClientUsesCoordinationOptimizedPool(t *testing.T) {
 	if !options.DisableIdentity {
 		t.Fatal("client identity handshake must be disabled")
 	}
-	if options.PoolSize != 64 || options.MinIdleConns != 16 ||
-		options.MaxConcurrentDials != 16 {
+	if options.PoolSize != 256 || options.MinIdleConns != 64 ||
+		options.MaxConcurrentDials != 64 {
 		t.Fatalf(
 			"pool = size:%d idle:%d dials:%d",
 			options.PoolSize, options.MinIdleConns, options.MaxConcurrentDials,

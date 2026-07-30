@@ -169,9 +169,9 @@ func (c NetworkClient) client() (*goredis.Client, error) {
 	// avoids push-processing reads on every lock and rate-limit operation.
 	options.Protocol = 2
 	options.DisableIdentity = true
-	options.PoolSize = 64
-	options.MinIdleConns = 16
-	options.MaxConcurrentDials = 16
+	options.PoolSize = 256
+	options.MinIdleConns = 64
+	options.MaxConcurrentDials = 64
 	client := goredis.NewClient(options)
 	existing, loaded := networkClients.LoadOrStore(c.URL, client)
 	if loaded {

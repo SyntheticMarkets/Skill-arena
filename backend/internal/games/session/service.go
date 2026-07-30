@@ -144,30 +144,6 @@ func (s *Service) SubmitAction(
 		userID, envelope.Kind, string(envelope.Payload),
 		fmt.Sprint(envelope.ClientSequence), fmt.Sprint(envelope.ExpectedStateVersion),
 	)
-	lockKey := "game:action:" + matchID
-	var lockToken string
-	lockDeadline := time.NewTimer(2 * time.Second)
-	defer lockDeadline.Stop()
-	for {
-		var locked bool
-		var lockErr error
-		lockToken, locked, lockErr = s.store.Redis().Lock(ctx, lockKey, 5*time.Second)
-		if lockErr != nil {
-			return ActionResult{}, lockErr
-		}
-		if locked {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return ActionResult{}, ctx.Err()
-		case <-lockDeadline.C:
-			return ActionResult{}, db.ErrRealtimeConflict
-		case <-time.After(2 * time.Millisecond):
-		}
-	}
-	defer s.store.Redis().Unlock(context.Background(), lockKey, lockToken)
-
 	actionContext, err := s.store.GetGameActionContext(
 		ctx, matchID, userID, envelope.ActionID, envelope.ClientSequence,
 	)

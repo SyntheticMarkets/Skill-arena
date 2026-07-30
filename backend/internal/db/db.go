@@ -386,6 +386,10 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 			_ = pg.Close()
 			return nil, fmt.Errorf("migrate Arena Hub state: %w", err)
 		}
+		if err := store.loadPostgresJobs(ctx); err != nil {
+			_ = pg.Close()
+			return nil, fmt.Errorf("load PostgreSQL jobs: %w", err)
+		}
 		if environment == "production" {
 			if err := warmPostgresPool(ctx, pg, maxIdleConnections); err != nil {
 				_ = pg.Close()
@@ -989,7 +993,12 @@ func (s *Store) initPostgresGames(ctx context.Context) error {
 	if err := s.applyFinancialMigration(ctx, "008_games_puzzle_service", migrations.GamesPuzzleService); err != nil {
 		return err
 	}
-	return s.applyFinancialMigration(ctx, "009_games_runtime", migrations.GamesRuntime)
+	if err := s.applyFinancialMigration(ctx, "009_games_runtime", migrations.GamesRuntime); err != nil {
+		return err
+	}
+	return s.applyFinancialMigration(
+		ctx, "010_background_jobs_authoritative", migrations.BackgroundJobsAuthoritative,
+	)
 }
 
 func (s *Store) loadPostgresSnapshot(ctx context.Context) (bool, error) {
@@ -4704,8 +4713,6 @@ func (s *Store) EnqueueJob(ctx context.Context, jobType string, payload map[stri
 	if jobType == "" {
 		return nil, errors.New("job type is required")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	if runAfter.IsZero() {
 		runAfter = now
@@ -4727,9 +4734,19 @@ func (s *Store) EnqueueJob(ctx context.Context, jobType string, payload map[stri
 	if job.MaxAttempts <= 0 {
 		job.MaxAttempts = 3
 	}
-	s.jobs[job.ID] = job
-	if err := s.persistJobs(); err != nil {
-		return nil, err
+	if s.pg != nil {
+		if err := s.enqueuePostgresJob(ctx, job); err != nil {
+			return nil, err
+		}
+		s.cacheBackgroundJob(job)
+	} else {
+		s.mu.Lock()
+		s.jobs[job.ID] = job
+		if err := s.persistJobs(); err != nil {
+			s.mu.Unlock()
+			return nil, err
+		}
+		s.mu.Unlock()
 	}
 	if err := s.setRedisJSON(ctx, "queue:"+job.Type+":"+job.ID, job, time.Until(job.RunAfter)+24*time.Hour); err != nil {
 		return nil, err
@@ -4739,6 +4756,9 @@ func (s *Store) EnqueueJob(ctx context.Context, jobType string, payload map[stri
 }
 
 func (s *Store) ListJobs(ctx context.Context, status string) ([]*models.BackgroundJob, error) {
+	if s.pg != nil {
+		return s.listPostgresJobs(ctx, status)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	jobs := make([]*models.BackgroundJob, 0, len(s.jobs))
@@ -4757,6 +4777,16 @@ func (s *Store) ListJobs(ctx context.Context, status string) ([]*models.Backgrou
 }
 
 func (s *Store) ClaimNextJob(ctx context.Context, worker string, jobTypes []string, now time.Time) (*models.BackgroundJob, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if s.pg != nil {
+		job, err := s.claimPostgresJob(ctx, worker, jobTypes, now.UTC())
+		if err == nil {
+			s.cacheBackgroundJob(job)
+		}
+		return job, err
+	}
 	lockToken, locked, err := s.redis.Lock(ctx, "jobs:claim", 15*time.Second)
 	if err != nil {
 		return nil, err
@@ -4768,9 +4798,6 @@ func (s *Store) ClaimNextJob(ctx context.Context, worker string, jobTypes []stri
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
 	allowed := map[string]bool{}
 	for _, jobType := range jobTypes {
 		allowed[jobType] = true
@@ -4805,6 +4832,16 @@ func (s *Store) ClaimNextJob(ctx context.Context, worker string, jobTypes []stri
 }
 
 func (s *Store) CompleteJob(ctx context.Context, jobID, artifact string) error {
+	if s.pg != nil {
+		job, err := s.completePostgresJob(ctx, jobID, artifact, time.Now().UTC())
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("job not found")
+		}
+		if err == nil {
+			s.cacheBackgroundJob(job)
+		}
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job := s.jobs[jobID]
@@ -4820,6 +4857,16 @@ func (s *Store) CompleteJob(ctx context.Context, jobID, artifact string) error {
 }
 
 func (s *Store) FailJob(ctx context.Context, jobID string, failure error) error {
+	if s.pg != nil {
+		job, err := s.failPostgresJob(ctx, jobID, failure.Error(), time.Now().UTC())
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("job not found")
+		}
+		if err == nil {
+			s.cacheBackgroundJob(job)
+		}
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job := s.jobs[jobID]
@@ -4842,6 +4889,16 @@ func (s *Store) FailJob(ctx context.Context, jobID string, failure error) error 
 }
 
 func (s *Store) RetryJob(ctx context.Context, jobID string) (*models.BackgroundJob, error) {
+	if s.pg != nil {
+		job, err := s.retryPostgresJob(ctx, jobID, time.Now().UTC())
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("job not found")
+		}
+		if err == nil {
+			s.cacheBackgroundJob(job)
+		}
+		return job, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job := s.jobs[jobID]
@@ -4865,6 +4922,16 @@ func (s *Store) RetryJob(ctx context.Context, jobID string) (*models.BackgroundJ
 }
 
 func (s *Store) CancelJob(ctx context.Context, jobID string) (*models.BackgroundJob, error) {
+	if s.pg != nil {
+		job, err := s.cancelPostgresJob(ctx, jobID, time.Now().UTC())
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("job not found")
+		}
+		if err == nil {
+			s.cacheBackgroundJob(job)
+		}
+		return job, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job := s.jobs[jobID]

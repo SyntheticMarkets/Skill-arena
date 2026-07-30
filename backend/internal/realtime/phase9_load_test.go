@@ -30,8 +30,11 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Minute)
 	defer cancel()
+	const matchCount = 100
 	store, err := db.NewWithOptions(ctx, db.Options{
 		DatabaseURL: databaseURL, RedisURL: redisURL, Environment: "production",
+		DatabaseMaxOpenConns: matchCount,
+		DatabaseMaxIdleConns: matchCount,
 		Storage: config.StorageSettings{
 			Provider: "s3-compatible", Endpoint: s3Endpoint, Bucket: s3Bucket,
 			AccessKey: s3AccessKey, SecretKey: s3SecretKey, Region: "us-east-1",
@@ -43,7 +46,6 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close(context.Background()) })
 	service := NewService(store)
 
-	const matchCount = 100
 	firstPlayers := make([]*models.User, matchCount)
 	secondPlayers := make([]*models.User, matchCount)
 	for index := range matchCount {
@@ -114,6 +116,8 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 	}
 
 	actionLatencies := make([]time.Duration, 0, matchCount*40)
+	ordinaryActionLatencies := make([]time.Duration, 0, matchCount*40)
+	completionActionLatencies := make([]time.Duration, 0, matchCount)
 	reconnectLatencies := make([]time.Duration, 0, matchCount)
 	var latencyMu sync.Mutex
 	errs = make(chan error, matchCount)
@@ -185,6 +189,11 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 					}
 					latencyMu.Lock()
 					actionLatencies = append(actionLatencies, elapsed)
+					if result.Completion == nil {
+						ordinaryActionLatencies = append(ordinaryActionLatencies, elapsed)
+					} else {
+						completionActionLatencies = append(completionActionLatencies, elapsed)
+					}
 					latencyMu.Unlock()
 				}
 			}
@@ -220,10 +229,14 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 	prepP99 := phase9Quantile(preparation, 99)
 	actionP95 := phase9Quantile(actionLatencies, 95)
 	actionP99 := phase9Quantile(actionLatencies, 99)
+	ordinaryActionP95 := phase9Quantile(ordinaryActionLatencies, 95)
+	ordinaryActionP99 := phase9Quantile(ordinaryActionLatencies, 99)
+	completionActionP95 := phase9Quantile(completionActionLatencies, 95)
 	reconnectP95 := phase9Quantile(reconnectLatencies, 95)
 	t.Logf(
-		"matches=%d actions=%d preparation_p99=%s action_p95=%s action_p99=%s reconnect_p95=%s",
-		len(paired), len(actionLatencies), prepP99, actionP95, actionP99, reconnectP95,
+		"matches=%d actions=%d preparation_p99=%s action_p95=%s action_p99=%s ordinary_action_p95=%s ordinary_action_p99=%s completion_action_p95=%s reconnect_p95=%s",
+		len(paired), len(actionLatencies), prepP99, actionP95, actionP99,
+		ordinaryActionP95, ordinaryActionP99, completionActionP95, reconnectP95,
 	)
 	if prepP99 > 5*time.Second {
 		t.Fatalf("match preparation p99 %s exceeds 5s", prepP99)

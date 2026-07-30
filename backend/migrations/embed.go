@@ -31,3 +31,8 @@ var GamesPuzzleService string
 //
 //go:embed 009_games_runtime.sql
 var GamesRuntime string
+
+// BackgroundJobsAuthoritative moves the production worker queue off snapshots.
+//
+//go:embed 010_background_jobs_authoritative.sql
+var BackgroundJobsAuthoritative string
