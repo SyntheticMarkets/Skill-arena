@@ -76,8 +76,10 @@ jobs:
       - name: Create private validation bucket
         run: |
           curl --fail --silent --show-error \
-            https://dl.min.io/client/mc/release/linux-amd64/mc.RELEASE.2025-04-16T18-13-26Z \
+            https://dl.min.io/client/mc/release/linux-amd64/archive/mc.RELEASE.2025-04-16T18-13-26Z \
             --output /tmp/mc
+          echo "ac90da87a35641be5a0ac75d49de5161ddb47d629b5ba01261b0ae9e00aea15f  /tmp/mc" \
+            | sha256sum --check
           chmod +x /tmp/mc
           /tmp/mc alias set phase9 http://127.0.0.1:59000 phase9minio phase9-minio-ci-secret
           /tmp/mc mb --ignore-existing phase9/skill-arena-phase9
