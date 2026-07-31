@@ -32,15 +32,16 @@ jobs:
       - name: Validate Prometheus configuration and rules
         run: |
           docker run --rm \
-            -v "$PWD/deploy/monitoring:/etc/skill-arena:ro" \
+            -v "$PWD/deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
+            -v "$PWD/deploy/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro" \
             --entrypoint /bin/promtool \
             prom/prometheus:v3.5.0 \
-            check config /etc/skill-arena/prometheus.yml
+            check config /etc/prometheus/prometheus.yml
           docker run --rm \
-            -v "$PWD/deploy/monitoring:/etc/skill-arena:ro" \
+            -v "$PWD/deploy/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro" \
             --entrypoint /bin/promtool \
             prom/prometheus:v3.5.0 \
-            check rules /etc/skill-arena/alerts.yml
+            check rules /etc/prometheus/alerts.yml
       - name: Validate Grafana dashboard JSON
         run: jq empty deploy/monitoring/grafana/dashboards/*.json
       - name: Validate operations shell scripts
