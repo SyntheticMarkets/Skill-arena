@@ -1,0 +1,80 @@
+name: RC1 Operations Validation
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/rc1-operations-validation.yml"
+      - "backend/internal/config/**"
+      - "backend/internal/observability/**"
+      - "backend/internal/server/**"
+      - "deploy/**"
+      - "docker-compose.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate release operations assets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Validate backend monitoring implementation
+        working-directory: backend
+        run: |
+          go test ./internal/config ./internal/observability ./internal/server -count=1
+          go vet ./internal/config ./internal/observability ./internal/server
+      - name: Validate Prometheus configuration and rules
+        run: |
+          docker run --rm \
+            -v "$PWD/deploy/monitoring:/etc/skill-arena:ro" \
+            --entrypoint /bin/promtool \
+            prom/prometheus:v3.5.0 \
+            check config /etc/skill-arena/prometheus.yml
+          docker run --rm \
+            -v "$PWD/deploy/monitoring:/etc/skill-arena:ro" \
+            --entrypoint /bin/promtool \
+            prom/prometheus:v3.5.0 \
+            check rules /etc/skill-arena/alerts.yml
+      - name: Validate Grafana dashboard JSON
+        run: jq empty deploy/monitoring/grafana/dashboards/*.json
+      - name: Validate operations shell scripts
+        run: |
+          docker run --rm -v "$PWD:/mnt:ro" koalaman/shellcheck:v0.10.0 \
+            deploy/scripts/validate-rolling-restart.sh \
+            deploy/scripts/verify-postgres-backup-restore.sh
+      - name: Validate production Compose model
+        env:
+          POSTGRES_PASSWORD: rc1-postgres-validation-password
+          REDIS_PASSWORD: rc1-redis-validation-password
+          MINIO_ROOT_USER: rc1minio
+          MINIO_ROOT_PASSWORD: rc1-minio-validation-password
+          SKILL_ARENA_JWT_SECRET: rc1-jwt-validation-secret-at-least-32-characters
+          SKILL_ARENA_MFA_ENCRYPTION_KEY: rc1-mfa-validation-secret-at-least-32-characters
+          SKILL_ARENA_PUZZLE_SECRET: rc1-puzzle-validation-secret-at-least-32-characters
+          SKILL_ARENA_PUZZLE_ENCRYPTION_KEY: rc1-puzzle-encryption-secret-at-least-32-characters
+          SKILL_ARENA_REPLAY_SIGNING_KEY: rc1-replay-validation-secret-at-least-32-characters
+          SKILL_ARENA_REPLAY_SIGNING_KEY_ID: rc1-replay-v1
+          SKILL_ARENA_PUBLIC_BASE_URL: https://arena.example.invalid
+          SKILL_ARENA_ADMIN_BASE_URL: https://operations.example.invalid
+          SKILL_ARENA_ALLOWED_ORIGINS: https://arena.example.invalid,https://operations.example.invalid
+          SKILL_ARENA_SMTP_HOST: smtp.example.invalid
+          SKILL_ARENA_EMAIL_FROM: security@example.invalid
+          SKILL_ARENA_PAYMENT_ACTIVE_PROVIDERS: stripe
+          SKILL_ARENA_PAYMENT_DEFAULT_PROVIDER: stripe
+          NEXT_PUBLIC_API_BASE_URL: https://api.example.invalid
+          GRAFANA_ROOT_URL: https://monitoring.example.invalid
+          SKILL_ARENA_METRICS_TOKEN_FILE: /tmp/skill-arena-secrets/metrics_token
+          GRAFANA_ADMIN_PASSWORD_FILE: /tmp/skill-arena-secrets/grafana_admin_password
+        run: |
+          mkdir -p /tmp/skill-arena-secrets
+          printf '%s\n' 'rc1-metrics-validation-token-at-least-32-characters' \
+            >/tmp/skill-arena-secrets/metrics_token
+          printf '%s\n' 'rc1-grafana-validation-password' \
+            >/tmp/skill-arena-secrets/grafana_admin_password
+          docker compose --profile monitoring config --quiet

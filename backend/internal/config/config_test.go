@@ -1,9 +1,23 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestMetricsTokenCanBeLoadedFromSecretFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metrics-token")
+	if err := os.WriteFile(path, []byte("metrics-secret-from-mounted-file-at-least-32-characters\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SKILL_ARENA_METRICS_TOKEN", "")
+	t.Setenv("SKILL_ARENA_METRICS_TOKEN_FILE", path)
+	if got := secretValue("SKILL_ARENA_METRICS_TOKEN", "SKILL_ARENA_METRICS_TOKEN_FILE"); got != "metrics-secret-from-mounted-file-at-least-32-characters" {
+		t.Fatalf("secretValue=%q", got)
+	}
+}
 
 func TestLoadRuntimeSettingsReadsEnvironmentOverrides(t *testing.T) {
 	t.Setenv("SKILL_ARENA_FEATURE_MEMORY_ARENA", "true")
@@ -46,6 +60,7 @@ func TestPaymentRoutingConfigurationIsProviderNeutral(t *testing.T) {
 
 func TestProductionRequiresPostgreSQLAndSecretsFromEnvironment(t *testing.T) {
 	t.Setenv("SKILL_ARENA_ENV", "production")
+	t.Setenv("SKILL_ARENA_METRICS_TOKEN", "production-test-metrics-token-at-least-32-characters")
 	t.Setenv("SKILL_ARENA_DATABASE_URL", "./data")
 	t.Setenv("SKILL_ARENA_JWT_SECRET", "test-secret")
 
@@ -57,6 +72,7 @@ func TestProductionRequiresPostgreSQLAndSecretsFromEnvironment(t *testing.T) {
 
 func TestProductionConfigurationAcceptsExternalServiceURLs(t *testing.T) {
 	t.Setenv("SKILL_ARENA_ENV", "production")
+	t.Setenv("SKILL_ARENA_METRICS_TOKEN", "production-test-metrics-token-at-least-32-characters")
 	t.Setenv("SKILL_ARENA_DATABASE_URL", "postgres://user:pass@localhost:5432/skillarena?sslmode=disable")
 	t.Setenv("SKILL_ARENA_REDIS_URL", "redis://localhost:6379")
 	t.Setenv("SKILL_ARENA_JWT_SECRET", "production-test-jwt-secret-at-least-32-characters")

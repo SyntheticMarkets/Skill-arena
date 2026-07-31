@@ -1,8 +1,13 @@
 package server
 
 import (
+	"bufio"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +17,7 @@ import (
 	"skill-arena/internal/email"
 	"skill-arena/internal/handlers"
 	"skill-arena/internal/models"
+	"skill-arena/internal/observability"
 	"skill-arena/internal/realtime"
 )
 
@@ -26,9 +32,11 @@ func New(store *db.Store, cfg *config.Config) *Server {
 	crm := handlers.NewAdminCRMHandlers(store, cfg.Settings)
 	realtimeHandlers := handlers.NewRealtimeHandlers(store)
 	realtimeGateway := realtime.NewGateway(store, realtimeHandlers.Service(), cfg)
+	metrics := observability.NewPrometheusRecorder()
 	router.Handle("/health", healthHandler(store, cfg, financial))
 	router.HandleFunc("/health/live", liveHandler)
 	router.Handle("/health/ready", healthHandler(store, cfg, financial))
+	router.Handle("/metrics", metricsHandler(store, metrics, cfg.MetricsToken))
 	router.Handle("/api/v1/config/features", handlers.FeatureFlagsHandler(cfg.Settings))
 	router.Handle("/api/v1/platform/stats", handlers.PlatformStatsHandler(store))
 	router.Handle("/api/v1/platform/puzzle-preview", handlers.PlatformPuzzlePreviewHandler())
@@ -141,7 +149,7 @@ func New(store *db.Store, cfg *config.Config) *Server {
 	return &Server{
 		Server: http.Server{
 			Addr:              cfg.HTTPAddr,
-			Handler:           securityHeadersMiddleware(corsMiddleware(cfg, csrfMiddleware(cfg, requestSizeMiddleware(handlers.RateLimitMiddlewareWithStore(store, router))))),
+			Handler:           metricsMiddleware(metrics, securityHeadersMiddleware(corsMiddleware(cfg, csrfMiddleware(cfg, requestSizeMiddleware(handlers.RateLimitMiddlewareWithStore(store, router)))))),
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       15 * time.Second,
 			WriteTimeout:      30 * time.Second,
@@ -149,6 +157,115 @@ func New(store *db.Store, cfg *config.Config) *Server {
 			MaxHeaderBytes:    1 << 20,
 		},
 	}
+}
+
+type metricsResponseWriter struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (w *metricsResponseWriter) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.status = status
+	w.wroteHeader = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *metricsResponseWriter) Write(body []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(body)
+}
+
+func (w *metricsResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("response writer does not support hijacking")
+	}
+	return hijacker.Hijack()
+}
+
+func (w *metricsResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *metricsResponseWriter) ReadFrom(reader io.Reader) (int64, error) {
+	if readerFrom, ok := w.ResponseWriter.(io.ReaderFrom); ok {
+		return readerFrom.ReadFrom(reader)
+	}
+	return io.Copy(w.ResponseWriter, reader)
+}
+
+func (w *metricsResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func metricsMiddleware(recorder *observability.PrometheusRecorder, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		response := &metricsResponseWriter{ResponseWriter: w, status: http.StatusOK}
+		ctx := observability.WithTimingRecorder(r.Context(), recorder)
+		next.ServeHTTP(response, r.WithContext(ctx))
+		recorder.ObserveHTTPRequest(r.Method, response.status, time.Since(started))
+	})
+}
+
+func metricsHandler(
+	store *db.Store,
+	recorder *observability.PrometheusRecorder,
+	token string,
+) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if token == "" {
+			http.NotFound(w, r)
+			return
+		}
+		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
+			http.Error(w, "metrics authentication required", http.StatusUnauthorized)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		if err := recorder.WritePrometheus(w); err != nil {
+			return
+		}
+		if stats, ok := store.DatabaseStats(); ok {
+			writePrometheusGauge(w, "skill_arena_database_open_connections", float64(stats.OpenConnections))
+			writePrometheusGauge(w, "skill_arena_database_in_use_connections", float64(stats.InUse))
+			writePrometheusGauge(w, "skill_arena_database_idle_connections", float64(stats.Idle))
+			writePrometheusGauge(w, "skill_arena_database_wait_total", float64(stats.WaitCount))
+			writePrometheusGauge(w, "skill_arena_database_wait_seconds_total", stats.WaitDuration.Seconds())
+		}
+		if realtimeMetrics, err := store.RealtimeMetrics(r.Context()); err == nil {
+			writePrometheusGauge(w, "skill_arena_realtime_connections", float64(realtimeMetrics.Connections))
+			writePrometheusGauge(w, "skill_arena_realtime_online_players", float64(realtimeMetrics.OnlinePlayers))
+			writePrometheusGauge(w, "skill_arena_realtime_queued_players", float64(realtimeMetrics.QueuedPlayers))
+			writePrometheusGauge(w, "skill_arena_realtime_active_matches", float64(realtimeMetrics.ActiveMatches))
+			writePrometheusGauge(w, "skill_arena_realtime_reconnects_total", float64(realtimeMetrics.Reconnects))
+			writePrometheusGauge(w, "skill_arena_realtime_match_errors_total", float64(realtimeMetrics.MatchErrors))
+			writePrometheusGauge(w, "skill_arena_realtime_replay_backlog", float64(realtimeMetrics.ReplayBacklog))
+			writePrometheusGauge(w, "skill_arena_realtime_gateway_latency_milliseconds", realtimeMetrics.GatewayLatencyMS)
+			writePrometheusGauge(w, "skill_arena_realtime_oldest_queue_seconds", float64(realtimeMetrics.OldestQueueSecond))
+		}
+		if queue, err := store.QueueStats(r.Context()); err == nil {
+			writePrometheusGauge(w, "skill_arena_jobs_pending", float64(queue.PendingJobs))
+			writePrometheusGauge(w, "skill_arena_jobs_running", float64(queue.RunningJobs))
+			writePrometheusGauge(w, "skill_arena_jobs_failed", float64(queue.FailedJobs))
+			writePrometheusGauge(w, "skill_arena_jobs_retries_total", float64(queue.RetryCount))
+			writePrometheusGauge(w, "skill_arena_jobs_average_processing_seconds", queue.AverageProcessingSeconds)
+		}
+	})
+}
+
+func writePrometheusGauge(w http.ResponseWriter, name string, value float64) {
+	_, _ = fmt.Fprintf(w, "# TYPE %s gauge\n%s %g\n", name, name, value)
 }
 
 func liveHandler(w http.ResponseWriter, r *http.Request) {

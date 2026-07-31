@@ -1,0 +1,93 @@
+groups:
+  - name: skill-arena-release
+    rules:
+      - alert: SkillArenaBackendUnavailable
+        expr: up{job="skill-arena-backend"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Skill Arena backend metrics are unavailable
+          runbook: README.md#backend-unavailable
+
+      - alert: SkillArenaActionP95AboveReleaseGate
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(skill_arena_component_duration_seconds_bucket{
+                component="realtime.game_action.total"
+              }[10m])
+            )
+          ) > 0.05
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: Authoritative action P95 exceeds 50 ms
+          runbook: README.md#realtime-latency
+
+      - alert: SkillArenaActionP99AboveReleaseGate
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (
+              rate(skill_arena_component_duration_seconds_bucket{
+                component="realtime.game_action.total"
+              }[10m])
+            )
+          ) > 0.1
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: Authoritative action P99 exceeds 100 ms
+          runbook: README.md#realtime-latency
+
+      - alert: SkillArenaDatabasePoolSaturated
+        expr: |
+          skill_arena_database_in_use_connections
+          /
+          clamp_min(skill_arena_database_open_connections, 1) > 0.9
+        for: 10m
+        labels:
+          severity: high
+        annotations:
+          summary: Database connection pool is above 90 percent utilization
+          runbook: README.md#database-pool-saturation
+
+      - alert: SkillArenaDatabaseWaitsIncreasing
+        expr: increase(skill_arena_database_wait_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: Requests are waiting for database connections
+          runbook: README.md#database-pool-saturation
+
+      - alert: SkillArenaReplayBacklog
+        expr: skill_arena_realtime_replay_backlog > 25
+        for: 10m
+        labels:
+          severity: high
+        annotations:
+          summary: Replay persistence backlog is growing
+          runbook: README.md#replay-backlog
+
+      - alert: SkillArenaFailedJobs
+        expr: skill_arena_jobs_failed > 0
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: Background jobs have failed
+          runbook: README.md#failed-background-jobs
+
+      - alert: SkillArenaQueueDelay
+        expr: skill_arena_realtime_oldest_queue_seconds > 60
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: A realtime player has waited in queue for more than 60 seconds
+          runbook: README.md#matchmaking-queue-delay

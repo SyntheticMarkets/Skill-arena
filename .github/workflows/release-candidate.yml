@@ -1,0 +1,95 @@
+name: Release Candidate
+
+on:
+  push:
+    tags:
+      - "sprint-*-rc*"
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  regression:
+    name: Release regression
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            admin-crm/package-lock.json
+      - name: Backend
+        working-directory: backend
+        run: |
+          go test ./... -count=1
+          go vet ./...
+          go build ./...
+          go mod verify
+      - name: Player platform
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_BASE_URL: https://api.example.invalid
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm test
+          npm run build
+          npm audit --audit-level=high
+      - name: Admin CRM
+        working-directory: admin-crm
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm test
+          npm run build
+          npm audit --audit-level=high
+
+  images:
+    name: Publish ${{ matrix.component }} image
+    needs: regression
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: backend
+            context: backend
+          - component: player-platform
+            context: frontend
+          - component: admin-crm
+            context: admin-crm
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: metadata
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/skill-arena-${{ matrix.component }}
+          tags: |
+            type=ref,event=tag
+            type=sha,prefix=sha-
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=https://api.example.invalid
+          provenance: mode=max
+          sbom: true

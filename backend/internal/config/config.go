@@ -18,6 +18,7 @@ type Config struct {
 	DatabaseMaxOpenConns int
 	DatabaseMaxIdleConns int
 	JWTSecret            string
+	MetricsToken         string
 	Environment          string
 	RedisURL             string
 	Settings             *RuntimeSettings
@@ -34,7 +35,10 @@ func Load() (*Config, error) {
 		DatabaseMaxIdleConns: envInt(
 			"SKILL_ARENA_DATABASE_MAX_IDLE_CONNS", 20,
 		),
-		JWTSecret:   os.Getenv("SKILL_ARENA_JWT_SECRET"),
+		JWTSecret: os.Getenv("SKILL_ARENA_JWT_SECRET"),
+		MetricsToken: secretValue(
+			"SKILL_ARENA_METRICS_TOKEN", "SKILL_ARENA_METRICS_TOKEN_FILE",
+		),
 		Environment: strings.ToLower(envString("SKILL_ARENA_ENV", "development")),
 		RedisURL:    os.Getenv("SKILL_ARENA_REDIS_URL"),
 		Settings:    settings,
@@ -455,6 +459,9 @@ func LoadRuntimeSettings() *RuntimeSettings {
 }
 
 func validateProduction(cfg *Config) error {
+	if len(cfg.MetricsToken) < 32 {
+		return errors.New("production SKILL_ARENA_METRICS_TOKEN must be at least 32 characters")
+	}
 	if len(cfg.JWTSecret) < 32 || strings.Contains(strings.ToLower(cfg.JWTSecret), "development") || cfg.JWTSecret == "test-secret" {
 		return errors.New("production SKILL_ARENA_JWT_SECRET must be at least 32 characters and must not be a development secret")
 	}
@@ -703,6 +710,21 @@ func envString(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func secretValue(environmentName, fileEnvironmentName string) string {
+	if value := strings.TrimSpace(os.Getenv(environmentName)); value != "" {
+		return value
+	}
+	path := strings.TrimSpace(os.Getenv(fileEnvironmentName))
+	if path == "" {
+		return ""
+	}
+	value, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(value))
 }
 
 func envInt(key string, fallback int) int {

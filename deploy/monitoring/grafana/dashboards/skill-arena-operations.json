@@ -1,0 +1,159 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "skill-arena-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(skill_arena_component_duration_seconds_bucket{component=\"realtime.game_action.total\"}[5m]))) * 1000",
+          "legendFormat": "P95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(skill_arena_component_duration_seconds_bucket{component=\"realtime.game_action.total\"}[5m]))) * 1000",
+          "legendFormat": "P99"
+        }
+      ],
+      "title": "Authoritative action latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "skill-arena-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "skill_arena_database_in_use_connections",
+          "legendFormat": "in use"
+        },
+        {
+          "expr": "skill_arena_database_open_connections",
+          "legendFormat": "open"
+        }
+      ],
+      "title": "Database connections",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "skill-arena-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "targets": [
+        {
+          "expr": "skill_arena_realtime_active_matches",
+          "legendFormat": "active matches"
+        },
+        {
+          "expr": "skill_arena_realtime_online_players",
+          "legendFormat": "online players"
+        }
+      ],
+      "title": "Realtime activity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "skill-arena-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 8
+      },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "skill_arena_realtime_replay_backlog",
+          "legendFormat": "replay backlog"
+        },
+        {
+          "expr": "skill_arena_jobs_pending",
+          "legendFormat": "pending jobs"
+        },
+        {
+          "expr": "skill_arena_jobs_failed",
+          "legendFormat": "failed jobs"
+        }
+      ],
+      "title": "Workers and queues",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "skill-arena-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 8
+      },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "skill_arena_realtime_oldest_queue_seconds",
+          "legendFormat": "oldest queue"
+        },
+        {
+          "expr": "skill_arena_realtime_gateway_latency_milliseconds / 1000",
+          "legendFormat": "reported gateway latency"
+        }
+      ],
+      "title": "Queue and connection latency",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 41,
+  "tags": [
+    "skill-arena",
+    "rc1"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "Skill Arena Operations",
+  "uid": "skill-arena-operations",
+  "version": 1
+}

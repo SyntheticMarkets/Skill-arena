@@ -1,0 +1,75 @@
+name: Sprint 6 RC1 Production Soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: Soak duration in minutes
+        required: true
+        default: "120"
+      production_equivalent_confirmation:
+        description: Type PRODUCTION-EQUIVALENT to authorize the run
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    if: inputs.production_equivalent_confirmation == 'PRODUCTION-EQUIVALENT'
+    runs-on: [self-hosted, linux, x64, skill-arena-production-validation]
+    timeout-minutes: 180
+    environment: production-validation
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      SKILL_ARENA_PHASE9_LOAD_POSTGRES_URL: ${{ secrets.SKILL_ARENA_VALIDATION_POSTGRES_URL }}
+      SKILL_ARENA_PHASE9_LOAD_REDIS_URL: ${{ secrets.SKILL_ARENA_VALIDATION_REDIS_URL }}
+      SKILL_ARENA_PHASE9_LOAD_S3_ENDPOINT: ${{ secrets.SKILL_ARENA_VALIDATION_S3_ENDPOINT }}
+      SKILL_ARENA_PHASE9_LOAD_S3_BUCKET: ${{ secrets.SKILL_ARENA_VALIDATION_S3_BUCKET }}
+      SKILL_ARENA_PHASE9_LOAD_S3_ACCESS_KEY: ${{ secrets.SKILL_ARENA_VALIDATION_S3_ACCESS_KEY }}
+      SKILL_ARENA_PHASE9_LOAD_S3_SECRET_KEY: ${{ secrets.SKILL_ARENA_VALIDATION_S3_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Validate requested duration and infrastructure secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          duration="${{ inputs.duration_minutes }}"
+          test "$duration" -ge 120
+          test "$duration" -le 150
+          test -n "$SKILL_ARENA_PHASE9_LOAD_POSTGRES_URL"
+          test -n "$SKILL_ARENA_PHASE9_LOAD_REDIS_URL"
+          test -n "$SKILL_ARENA_PHASE9_LOAD_S3_ENDPOINT"
+          test -n "$SKILL_ARENA_PHASE9_LOAD_S3_BUCKET"
+          test -n "$SKILL_ARENA_PHASE9_LOAD_S3_ACCESS_KEY"
+          test -n "$SKILL_ARENA_PHASE9_LOAD_S3_SECRET_KEY"
+      - name: Run sustained authoritative workload
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + ${{ inputs.duration_minutes }} * 60 ))
+          iteration=0
+          mkdir -p ../artifacts/soak
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            iteration=$((iteration + 1))
+            echo "===== soak iteration $iteration =====" | tee -a ../artifacts/soak/run.log
+            go test ./internal/realtime \
+              -run TestPhase9OneHundredLiveMazeMatches \
+              -count=1 -v -timeout 25m 2>&1 | tee -a ../artifacts/soak/run.log
+          done
+          echo "iterations=$iteration" | tee ../artifacts/soak/summary.txt
+          test "$iteration" -gt 0
+      - name: Upload soak evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sprint-6-rc1-soak-${{ github.run_id }}
+          path: artifacts/soak
+          if-no-files-found: error
+          retention-days: 90
