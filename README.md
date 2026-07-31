@@ -8357,6 +8357,65 @@ per-match failure isolation while measuring the full acknowledgement path.
 
 No Sprint 6 freeze tag was created.
 
+###### Authoritative Action Latency Attribution
+
+Measurement date: 2026-07-31
+
+Decision: **BOTTLENECK ATTRIBUTED - CHANGES REQUIRED**
+
+Workflow:
+`https://github.com/SyntheticMarkets/Skill-arena/actions/runs/30608403326`
+
+The unchanged 100-match workload completed 3,760 authoritative actions with
+complete timing coverage for every required stage. The harness invokes
+`Service.GameAction` directly, so its action latency excludes WebSocket
+encoding, socket writes, and external network transit. Those layers therefore
+cannot account for the measured server-side release-gate failure.
+
+| Stage | P50 | P95 | P99 |
+|---|---:|---:|---:|
+| Full realtime action | `77.458 ms` | `314.458 ms` | `620.017 ms` |
+| Game session action | `76.863 ms` | `280.969 ms` | `468.405 ms` |
+| State/context load | `1.934 us` | `5.020 us` | `10.259 us` |
+| Action validation | `232.862 us` | `3.218 ms` | `39.341 ms` |
+| Action application | `386.757 us` | `4.788 ms` | `60.023 ms` |
+| State serialization | `93.203 us` | `755.009 us` | `4.113 ms` |
+| Commit preparation | `25.618 us` | `61.394 us` | `1.181 ms` |
+| Database connection acquisition | `1.653 us` | `2.474 us` | `666.986 us` |
+| Event/hash construction | `12.453 us` | `23.033 us` | `202.525 us` |
+| SQL statement construction | `19.467 us` | `48.620 us` | `1.222 ms` |
+| PostgreSQL statement execution and durable commit | `65.860 ms` | `228.789 ms` | `376.798 ms` |
+| Cache publication | `3.967 us` | `11.571 us` | `1.061 ms` |
+| Renderer snapshot | `288.414 us` | `33.617 ms` | `147.282 ms` |
+| Acknowledgement JSON encoding | `122.197 us` | `2.135 ms` | `31.480 ms` |
+| Completion-only game outcome | `61.557 ms` | `325.344 ms` | `718.458 ms` |
+| Completion-only realtime transition and replay enqueue | `210.578 ms` | `652.079 ms` | `1.146 s` |
+
+PostgreSQL statement execution and durable commit account for approximately
+72.8 percent of full-action P95 when the independently calculated stage
+quantiles are compared. Connection acquisition, cached state loading, SQL
+construction, action validation, action application, and acknowledgement
+encoding are not dominant at P95. Snapshot generation shows secondary
+contention at the tail, and the 100 terminal actions incur a separate,
+substantial synchronous match-completion transition and replay-enqueue path.
+
+PostgreSQL remained configured with `synchronous_commit=on`,
+`full_page_writes=on`, and `fdatasync`. The pool reached 100 in-use connections
+with zero pool waits. The run recorded 2,397 WAL synchronizations and
+`4,471.366 ms` aggregate WAL synchronization time, while client-observed
+statement execution remained much larger. This reinforces that raw WAL fsync
+time alone does not explain the action tail.
+
+The next remediation must remain measurement-led and preserve per-match failure
+isolation. For ordinary actions, it should attribute time inside the single
+atomic persistence statement, including row-lock waits, buffer contention,
+statement execution, and commit. The terminal-action transition/replay-enqueue
+path must be investigated separately rather than conflated with ordinary move
+persistence. No persistence or acknowledgement contract was changed by this
+measurement.
+
+No Sprint 6 freeze tag was created.
+
 ##### Remaining Freeze Gates
 
 **High**
