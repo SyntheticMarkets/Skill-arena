@@ -31,9 +31,11 @@ jobs:
           go vet ./internal/config ./internal/observability ./internal/server
       - name: Validate Prometheus configuration and rules
         run: |
+          printf '%s\n' 'rc1-promtool-validation-token' >/tmp/metrics_token
           docker run --rm \
             -v "$PWD/deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
             -v "$PWD/deploy/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro" \
+            -v "/tmp/metrics_token:/run/secrets/metrics_token:ro" \
             --entrypoint /bin/promtool \
             prom/prometheus:v3.5.0 \
             check config /etc/prometheus/prometheus.yml
