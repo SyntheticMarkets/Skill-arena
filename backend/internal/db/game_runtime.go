@@ -429,12 +429,18 @@ func (s *Store) commitGameActionPostgres(
 	drafts []models.GameEventDraft,
 ) (*models.GameActionReceipt, []models.RealtimeEvent, error) {
 	started := time.Now()
-	conn, err := s.pg.Conn(ctx)
+	var conn *sql.Conn
+	var err error
+	if s.gameActionBatcher == nil {
+		conn, err = s.pg.Conn(ctx)
+	}
 	observability.ObserveTiming(ctx, "db.game_action_commit.acquire", started)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer conn.Close()
+	if conn != nil {
+		defer conn.Close()
+	}
 	sequence := expectedStreamSequence
 	previous := expectedStreamHash
 	events := make([]models.RealtimeEvent, 0, len(drafts))
@@ -454,7 +460,18 @@ func (s *Store) commitGameActionPostgres(
 	query, args := gameActionPersistenceStatement(
 		events, expectedStreamSequence, sequence, expected, next, receipt,
 	)
-	result, err := conn.ExecContext(ctx, query, args...)
+	var affected int64
+	if s.gameActionBatcher != nil {
+		affected, err = s.gameActionBatcher.Execute(
+			ctx, expected.MatchID, query, args,
+		)
+	} else {
+		var result sql.Result
+		result, err = conn.ExecContext(ctx, query, args...)
+		if result != nil {
+			affected, _ = result.RowsAffected()
+		}
+	}
 	observability.ObserveTiming(ctx, "db.game_action_commit.persist", started)
 	if err != nil {
 		if isPostgresUniqueViolation(err) {
@@ -462,7 +479,6 @@ func (s *Store) commitGameActionPostgres(
 		}
 		return nil, nil, err
 	}
-	affected, _ := result.RowsAffected()
 	if affected != 1 {
 		return nil, nil, ErrRealtimeConflict
 	}

@@ -113,17 +113,21 @@ type Store struct {
 	pg                    *sql.DB
 	redis                 saredis.Client
 	objects               storage.ObjectStore
+	gameActionBatcher     *gameActionBatcher
 }
 
 type Options struct {
-	DatabaseURL          string
-	DatabaseMaxOpenConns int
-	DatabaseMaxIdleConns int
-	Environment          string
-	RedisURL             string
-	Storage              config.StorageSettings
-	GamesRegistry        *gamesregistry.Registry
-	PuzzleRepository     mazegenerator.Repository
+	DatabaseURL            string
+	DatabaseMaxOpenConns   int
+	DatabaseMaxIdleConns   int
+	Environment            string
+	RedisURL               string
+	Storage                config.StorageSettings
+	GamesRegistry          *gamesregistry.Registry
+	PuzzleRepository       mazegenerator.Repository
+	GameActionBatchWorkers int
+	GameActionBatchSize    int
+	GameActionBatchWindow  time.Duration
 }
 
 func (s *Store) DatabaseStats() (sql.DBStats, bool) {
@@ -361,7 +365,16 @@ func NewWithOptions(ctx context.Context, opts Options) (*Store, error) {
 			return nil, err
 		}
 		store.pg = pg
+		if opts.GameActionBatchWorkers > 0 {
+			store.gameActionBatcher = newGameActionBatcher(
+				pg, opts.GameActionBatchWorkers, opts.GameActionBatchSize,
+				opts.GameActionBatchWindow,
+			)
+		}
 		if err := store.initPostgresPersistence(ctx); err != nil {
+			if store.gameActionBatcher != nil {
+				store.gameActionBatcher.Close()
+			}
 			_ = pg.Close()
 			return nil, err
 		}
@@ -4466,6 +4479,9 @@ func (s *Store) Close(ctx context.Context) error {
 		return err
 	}
 	if s.pg != nil {
+		if s.gameActionBatcher != nil {
+			s.gameActionBatcher.Close()
+		}
 		return s.pg.Close()
 	}
 	return nil

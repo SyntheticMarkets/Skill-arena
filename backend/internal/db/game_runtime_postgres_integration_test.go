@@ -21,7 +21,9 @@ func TestPostgresGameRuntimeAtomicStateReceiptAndEvents(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewWithOptions(ctx, Options{
 		DatabaseURL: databaseURL, Environment: "development",
-		Storage: config.StorageSettings{LocalRoot: t.TempDir()},
+		Storage:                config.StorageSettings{LocalRoot: t.TempDir()},
+		GameActionBatchWorkers: 2, GameActionBatchSize: 8,
+		GameActionBatchWindow: 2 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)

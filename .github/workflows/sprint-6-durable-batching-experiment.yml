@@ -1,4 +1,4 @@
-name: Sprint 6 Durable Group Commit Experiment
+name: Sprint 6 Repository Durable Batching Experiment
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   compare:
-    name: Baseline versus durable group commit
+    name: Baseline versus repository durable batching
     runs-on: ubuntu-24.04
     services:
       postgres:
@@ -87,19 +87,22 @@ jobs:
           SKILL_ARENA_PHASE9_LOAD_S3_SECRET_KEY: phase9-minio-ci-secret
           SKILL_ARENA_PHASE9_REPORT_LATENCY_ONLY: "true"
         run: |
-          for profile in baseline delay900 delay1800; do
+          for profile in baseline batch2 batch4; do
             database="skillarena_${profile}"
             createdb -h 127.0.0.1 -p 55433 -U skillarena "$database"
-            if [ "$profile" = "delay900" ]; then
-              psql -h 127.0.0.1 -p 55433 -U skillarena -d postgres \
-                -c "ALTER DATABASE $database SET commit_delay = 900" \
-                -c "ALTER DATABASE $database SET commit_siblings = 5"
-            elif [ "$profile" = "delay1800" ]; then
-              psql -h 127.0.0.1 -p 55433 -U skillarena -d postgres \
-                -c "ALTER DATABASE $database SET commit_delay = 1800" \
-                -c "ALTER DATABASE $database SET commit_siblings = 5"
+            unset SKILL_ARENA_PHASE9_ACTION_BATCH_WORKERS
+            unset SKILL_ARENA_PHASE9_ACTION_BATCH_SIZE
+            unset SKILL_ARENA_PHASE9_ACTION_BATCH_WINDOW_US
+            if [ "$profile" = "batch2" ]; then
+              export SKILL_ARENA_PHASE9_ACTION_BATCH_WORKERS=2
+              export SKILL_ARENA_PHASE9_ACTION_BATCH_SIZE=16
+              export SKILL_ARENA_PHASE9_ACTION_BATCH_WINDOW_US=500
+            elif [ "$profile" = "batch4" ]; then
+              export SKILL_ARENA_PHASE9_ACTION_BATCH_WORKERS=4
+              export SKILL_ARENA_PHASE9_ACTION_BATCH_SIZE=16
+              export SKILL_ARENA_PHASE9_ACTION_BATCH_WINDOW_US=500
             fi
-            echo "===== DURABILITY PROFILE: $profile ====="
+            echo "===== DURABLE BATCHING PROFILE: $profile ====="
             export SKILL_ARENA_PHASE9_LOAD_POSTGRES_URL="postgresql://skillarena:phase9-postgres-ci@127.0.0.1:55433/$database?sslmode=disable"
             go test ./internal/realtime \
               -run TestPhase9OneHundredLiveMazeMatches -count=1 -v -timeout 25m

@@ -45,10 +45,18 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 		}
 		databasePoolSize = parsed
 	}
+	batchWorkers := phase9OptionalInt(t, "SKILL_ARENA_PHASE9_ACTION_BATCH_WORKERS", 0, 16)
+	batchSize := phase9OptionalInt(t, "SKILL_ARENA_PHASE9_ACTION_BATCH_SIZE", 0, 128)
+	batchWindow := time.Duration(
+		phase9OptionalInt(t, "SKILL_ARENA_PHASE9_ACTION_BATCH_WINDOW_US", 0, 10000),
+	) * time.Microsecond
 	store, err := db.NewWithOptions(ctx, db.Options{
 		DatabaseURL: databaseURL, RedisURL: redisURL, Environment: "production",
-		DatabaseMaxOpenConns: databasePoolSize,
-		DatabaseMaxIdleConns: databasePoolSize,
+		DatabaseMaxOpenConns:   databasePoolSize,
+		DatabaseMaxIdleConns:   databasePoolSize,
+		GameActionBatchWorkers: batchWorkers,
+		GameActionBatchSize:    batchSize,
+		GameActionBatchWindow:  batchWindow,
 		Storage: config.StorageSettings{
 			Provider: "s3-compatible", Endpoint: s3Endpoint, Bucket: s3Bucket,
 			AccessKey: s3AccessKey, SecretKey: s3SecretKey, Region: "us-east-1",
@@ -349,6 +357,19 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 		}
 		t.Logf("REPORT ONLY: reconnect p95 %s exceeds 250ms", reconnectP95)
 	}
+}
+
+func phase9OptionalInt(t *testing.T, name string, minimum, maximum int) int {
+	t.Helper()
+	value := os.Getenv(name)
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < minimum || parsed > maximum {
+		t.Fatalf("invalid %s %q", name, value)
+	}
+	return parsed
 }
 
 type phase9TimingRecorder struct {
