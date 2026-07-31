@@ -64,10 +64,13 @@ jobs:
         include:
           - component: backend
             context: backend
+            build_args: ""
           - component: player-platform
             context: frontend
+            build_args: NEXT_PUBLIC_API_BASE_URL=https://api.example.invalid
           - component: admin-crm
             context: admin-crm
+            build_args: ""
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -79,7 +82,7 @@ jobs:
       - uses: docker/metadata-action@v5
         id: metadata
         with:
-          images: ghcr.io/${{ github.repository_owner }}/skill-arena-${{ matrix.component }}
+          images: ghcr.io/syntheticmarkets/skill-arena-${{ matrix.component }}
           tags: |
             type=ref,event=tag
             type=sha,prefix=sha-
@@ -89,7 +92,6 @@ jobs:
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
-          build-args: |
-            NEXT_PUBLIC_API_BASE_URL=https://api.example.invalid
+          build-args: ${{ matrix.build_args }}
           provenance: mode=max
           sbom: true
