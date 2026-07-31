@@ -8416,6 +8416,347 @@ measurement.
 
 No Sprint 6 freeze tag was created.
 
+##### Sprint 6 Release Candidate RC1
+
+Status: **SOFTWARE ARCHITECTURE FROZEN - PRODUCTION VALIDATION REQUIRED**
+
+RC1 is feature complete for Sprint 6. No new product feature, persistence
+redesign, replay redesign, realtime redesign, or development-machine latency
+optimization is authorized. Changes after RC1 are limited to defects, security,
+release engineering, production configuration, performance findings reproduced
+on production-equivalent infrastructure, and frontend integration support.
+
+RC1 is not the Sprint 6 freeze. The Sprint 6 freeze tag remains prohibited until
+all production-only gates below pass.
+
+###### RC1 Completed
+
+- Sprints 1 through 5 remain frozen and regression protected.
+- Games Platform, Puzzle Service, generator, solver, replay, Maze engine,
+  Realtime integration, and player-facing Maze presentation are complete.
+- PostgreSQL, Redis, and S3-compatible production adapters are implemented.
+- Live/readiness health checks cover identity, email, object storage, realtime,
+  and the active payment provider.
+- `/metrics` exposes authenticated Prometheus text format. Production requires a
+  distinct `SKILL_ARENA_METRICS_TOKEN` or mounted
+  `SKILL_ARENA_METRICS_TOKEN_FILE`; anonymous scraping fails closed.
+- Prometheus scraping, release alert rules, and a provisioned Grafana operations
+  dashboard live under `deploy/monitoring`.
+- The self-hosted `Sprint 6 RC1 Production Soak` workflow enforces a minimum
+  two-hour run on a runner labelled `skill-arena-production-validation`.
+- Guarded PostgreSQL backup/restore and multi-instance rolling-restart
+  validation scripts live under `deploy/scripts`.
+- The `Release Candidate` workflow runs regressions and publishes immutable,
+  SBOM- and provenance-enabled backend, Player Platform, and Admin CRM images to
+  GitHub Container Registry for an RC tag.
+- RC1 operations validation passed on Linux with Docker:
+  `https://github.com/SyntheticMarkets/Skill-arena/actions/runs/30619153115`.
+  The run verified backend monitoring tests, Prometheus configuration and alert
+  rules, Grafana dashboard JSON, operations scripts with ShellCheck, and the
+  production Compose model.
+- RC1 local regression passed on 2026-07-31: full Go tests, vet, build, and
+  module verification; Player Platform lint, TypeScript, 22 unit tests,
+  production build, dependency audit, and 27 Playwright passes with four
+  documented replay exclusions; Admin CRM lint, TypeScript, five unit tests,
+  production build, dependency audit, and three Playwright passes.
+- Kubernetes is not an RC1 deployment target. Docker Compose plus the selected
+  production load balancer/orchestrator is authoritative until Kubernetes is
+  separately designed and approved; no unvalidated Kubernetes manifests are
+  shipped.
+
+###### Production Validation Checklist
+
+The following checks require Ubuntu 24.04 LTS or equivalent production hardware
+with 4-8 dedicated vCPUs, 16-32 GB RAM, NVMe-class durable storage, PostgreSQL
+17, Redis, S3-compatible object storage, and the intended network/load-balancer
+topology.
+
+| Gate | Target | RC1 status |
+|---|---|---|
+| Authoritative action P95 | `< 50 ms` | **BLOCKING - production hardware required** |
+| Authoritative action P99 | `< 100 ms` | **BLOCKING - production hardware required** |
+| Reconnect P95 | `< 250 ms` | **BLOCKING - production hardware required** |
+| PostgreSQL commit/WAL profile | No unexplained critical contention | **BLOCKING - production hardware required** |
+| Object-storage latency | Within selected provider SLO | **BLOCKING - production hardware required** |
+| 100-match final load test | All integrity and latency gates pass | **BLOCKING - production hardware required** |
+| Continuous soak | At least two hours without correctness, leak, or availability failure | **BLOCKING - framework ready** |
+| Prometheus/Grafana/alerts | Scrape, query, dashboard, and alert delivery verified | **BLOCKING - configuration ready** |
+| Rolling restart | No unavailable health interval or lost durable state | **BLOCKING - framework ready** |
+| Multi-instance recovery | Reconnect and authoritative state recovery pass during instance loss | **BLOCKING - framework ready** |
+| Penetration test | No unresolved critical or high finding | **BLOCKING - preparation complete** |
+| Final regression | Backend, Player Platform, Admin CRM, vectors, race, and infrastructure suites pass | **BLOCKING - rerun after deployment** |
+
+###### Installation Guide
+
+1. Provision PostgreSQL 17, Redis 7.4, private S3-compatible storage, SMTP, the
+   selected payment provider, TLS termination, DNS, and an alert receiver.
+2. Create distinct secret-manager values for every secret listed below. Never
+   store values in Git, Compose files, image layers, shell history, or Grafana
+   dashboards.
+3. Create the metrics-token and Grafana-password secret files with mode `0600`
+   on the deployment host.
+4. Set production URLs and CORS origins to the exact HTTPS player, API,
+   operations, and monitoring domains.
+5. Run `docker compose --profile monitoring config --quiet`.
+6. Build or pull the immutable RC images produced by the Release Candidate
+   workflow.
+7. Start PostgreSQL, Redis, and object storage; wait for their health checks.
+8. Run the backend so migrations complete before admitting traffic.
+9. Start the Player Platform, Admin CRM, Prometheus, and Grafana.
+10. Verify `/health/live`, `/health/ready`, an authenticated `/metrics` scrape,
+    Prometheus targets, Grafana panels, SMTP delivery, object-storage writes,
+    payment-provider health, and backup creation.
+11. Keep public traffic disabled until the production checklist is signed by
+    Engineering, Security, and Operations.
+
+###### Production Configuration
+
+Secret values must come from the deployment secret manager. Compose supports a
+mounted metrics token through `SKILL_ARENA_METRICS_TOKEN_FILE`.
+
+**Core**
+
+- `SKILL_ARENA_ENV=production`
+- `SKILL_ARENA_HTTP_ADDR`
+- `SKILL_ARENA_DATABASE_URL`
+- `SKILL_ARENA_DATABASE_MAX_OPEN_CONNS`
+- `SKILL_ARENA_DATABASE_MAX_IDLE_CONNS`
+- `SKILL_ARENA_REDIS_URL`
+- `SKILL_ARENA_PUBLIC_BASE_URL`
+- `SKILL_ARENA_ADMIN_BASE_URL`
+- `SKILL_ARENA_ALLOWED_ORIGINS`
+- `SKILL_ARENA_SUPPORT_EMAIL`
+
+**Identity and cryptography**
+
+- `SKILL_ARENA_JWT_SECRET`
+- `SKILL_ARENA_MFA_ENCRYPTION_KEY`
+- `SKILL_ARENA_PUZZLE_SECRET`
+- `SKILL_ARENA_PUZZLE_ENCRYPTION_KEY`
+- `SKILL_ARENA_REPLAY_SIGNING_KEY`
+- `SKILL_ARENA_REPLAY_SIGNING_KEY_ID`
+- `SKILL_ARENA_REPLAY_VERIFICATION_KEYS`
+- `SKILL_ARENA_COOKIE_SECURE=true`
+- `SKILL_ARENA_COOKIE_DOMAIN`
+- `SKILL_ARENA_METRICS_TOKEN` or `SKILL_ARENA_METRICS_TOKEN_FILE`
+
+**Email**
+
+- `SKILL_ARENA_EMAIL_OUTBOX_ONLY=false`
+- `SKILL_ARENA_SMTP_HOST`
+- `SKILL_ARENA_SMTP_PORT`
+- `SKILL_ARENA_SMTP_USER`
+- `SKILL_ARENA_SMTP_PASS`
+- `SKILL_ARENA_EMAIL_FROM`
+
+**Object storage**
+
+- `SKILL_ARENA_STORAGE_PROVIDER=s3-compatible`
+- `SKILL_ARENA_S3_ENDPOINT`
+- `SKILL_ARENA_S3_BUCKET`
+- `SKILL_ARENA_S3_ACCESS_KEY`
+- `SKILL_ARENA_S3_SECRET_KEY`
+- `SKILL_ARENA_S3_REGION`
+
+**Payments and financial policy**
+
+- `SKILL_ARENA_PAYMENT_ACTIVE_PROVIDERS`
+- `SKILL_ARENA_PAYMENT_DEFAULT_PROVIDER`
+- `SKILL_ARENA_PAYMENT_ROUTES`
+- Credential variables required by each active provider adapter
+- `SKILL_ARENA_FINANCIAL_POLICIES`
+- `SKILL_ARENA_FINANCIAL_DEFAULT_COUNTRY`
+
+**Realtime and workers**
+
+- `SKILL_ARENA_REALTIME_QUEUE_TTL_SECONDS`
+- `SKILL_ARENA_REALTIME_PRESENCE_TTL_SECONDS`
+- `SKILL_ARENA_REALTIME_RECONNECT_SECONDS`
+- `SKILL_ARENA_REALTIME_MAX_RATING_GAP`
+- `SKILL_ARENA_REALTIME_MAX_LATENCY_MS`
+- `SKILL_ARENA_REALTIME_MAX_MESSAGE_BYTES`
+- `SKILL_ARENA_REALTIME_CONNECTIONS_PER_MINUTE`
+- `SKILL_ARENA_WORKERS_ENABLED=true`
+- `SKILL_ARENA_WORKER_POLL_SECONDS`
+- `SKILL_ARENA_WORKER_MAX_ATTEMPTS`
+- `SKILL_ARENA_BACKUP_HOUR_UTC`
+- `SKILL_ARENA_BACKUP_RETENTION_DAYS`
+- `SKILL_ARENA_SHUTDOWN_SECONDS`
+
+**Monitoring**
+
+- `SKILL_ARENA_METRICS_TOKEN_FILE`
+- `GRAFANA_ADMIN_PASSWORD_FILE`
+- `GRAFANA_ADMIN_USER`
+- `GRAFANA_ROOT_URL`
+- Alert receiver configuration in the selected Alertmanager or hosted
+  Prometheus service
+
+###### Operations Guide
+
+- Scrape `GET /metrics` with `Authorization: Bearer <metrics token>`.
+- Poll `GET /health/live` for process liveness and `GET /health/ready` for
+  dependency readiness. Only readiness should control traffic admission.
+- Monitor action P95/P99, database pool usage and waits, active matches, oldest
+  matchmaking queue age, replay backlog, failed jobs, and dependency health.
+- Treat replay-signing key rotation as a two-step operation: add the retiring
+  key to `SKILL_ARENA_REPLAY_VERIFICATION_KEYS`, deploy, then activate the new
+  signing key and ID. Never remove a verification key while retained replays
+  depend on it.
+- Run verified backups on schedule, copy artifacts to a separate failure domain,
+  and exercise restore at least monthly.
+- Drain traffic before planned backend shutdown. Preserve the reconnect window
+  and never terminate all realtime instances simultaneously.
+- Record every operational intervention, actor, reason, start/end time, affected
+  matches, and verification result in the incident log.
+
+###### Backend Unavailable
+
+1. Confirm load-balancer health and `/health/live`.
+2. Check container state and structured backend logs.
+3. Check `/health/ready` to identify the failed dependency.
+4. Remove only the unhealthy instance from rotation.
+5. Restore service from the immutable RC image; do not rebuild on the host.
+6. Confirm readiness and metrics before returning the instance to rotation.
+
+###### Realtime Latency
+
+1. Compare `realtime.game_action.total`, `game_action.total`, and
+   `db.game_action_commit.execute` histograms.
+2. Check database pool saturation, PostgreSQL waits, WAL latency, CPU steal,
+   storage latency, and network latency.
+3. Separate ordinary actions from terminal completion transitions.
+4. Do not change durability, batching, replay, or acknowledgement semantics
+   during an incident.
+5. Capture evidence and reproduce on production-equivalent staging before any
+   code or database change.
+
+###### Database Pool Saturation
+
+1. Confirm `skill_arena_database_in_use_connections` against open connections
+   and inspect `skill_arena_database_wait_total`.
+2. Identify long-running transactions and blocked sessions in PostgreSQL.
+3. Remove unhealthy application instances only after preserving reconnect
+   capacity.
+4. Do not increase pool size beyond PostgreSQL connection and memory capacity
+   without a measured load test.
+
+###### Replay Backlog
+
+1. Confirm object-storage and PostgreSQL readiness.
+2. Inspect replay worker health, failed jobs, attempts, and last error.
+3. Retry only idempotent jobs through the established queue workflow.
+4. Never create unsigned replay artifacts or bypass verification.
+
+###### Failed Background Jobs
+
+1. Group failures by job type and dependency.
+2. Confirm retry count and idempotency key before retrying.
+3. Escalate financial, replay-integrity, and backup failures immediately.
+4. Preserve failed-job evidence and audit records.
+
+###### Matchmaking Queue Delay
+
+1. Confirm Redis health, worker health, presence TTLs, and active regions.
+2. Check rating-gap policy and queue age distribution.
+3. Do not pair incompatible players merely to clear the alert.
+
+###### Backup And Restore
+
+- Use `deploy/scripts/verify-postgres-backup-restore.sh` only with a disposable
+  restore database whose name starts with `skillarena_restore_`.
+- The script creates a custom-format `pg_dump`, restores it into the disposable
+  database, compares every public table row count and canonical row-content
+  hash, and hashes the backup artifact.
+- After database verification, validate replay, evidence, export, and backup
+  objects against their stored hashes and retention policy.
+- A restore test is successful only when application readiness, ledger
+  integrity, replay verification, and immutable audit continuity all pass.
+
+###### Disaster Recovery
+
+1. Declare the incident and stop financial settlement if data integrity is
+   uncertain.
+2. Provision clean hosts from pinned images and configuration-as-code.
+3. Restore PostgreSQL from the latest verified backup and replay required WAL.
+4. Restore or reconnect Redis; authoritative durable state remains PostgreSQL.
+5. Reconnect S3-compatible storage and verify replay/evidence object hashes.
+6. Inject secrets from the secret manager and restore replay verification keys.
+7. Start one backend instance, run migrations, and verify readiness.
+8. Validate ledger totals, treasury reserves, audit continuity, replay
+   signatures, sessions, and outstanding jobs.
+9. Start remaining instances, Redis coordination, workers, Player Platform,
+   Admin CRM, Prometheus, and Grafana.
+10. Run smoke, reconnect, payment-idempotency, replay, and backup checks before
+    reopening traffic.
+
+###### Rolling Restart And Multi-Instance Recovery
+
+- Run at least two backend instances behind the production load balancer.
+- Set `SKILL_ARENA_HEALTH_URL`, `SKILL_ARENA_COMPOSE_FILE`, and optionally
+  `SKILL_ARENA_COMPOSE_PROJECT` before running
+  `deploy/scripts/validate-rolling-restart.sh`.
+- During restart, continuously exercise authenticated WebSocket actions and
+  reconnect. Verify no duplicate receipt, missing sequence, replay divergence,
+  or match-state rollback.
+- The script validates process rotation and public readiness; the production
+  reconnect workload supplies the state-continuity evidence.
+
+###### Security Hardening Checklist
+
+- TLS 1.2 or newer at every external endpoint; HSTS enabled at the edge.
+- Exact CORS origins; no wildcard credentialed origin.
+- Secure, HttpOnly, SameSite cookies; refresh rotation and replay detection.
+- MFA enforced for every privileged role; recovery codes single-use.
+- Password hashing, lockout, password history, session/device revocation, and
+  suspicious-login audit checks verified.
+- Financial idempotency keys, provider signatures, reserve checks, immutable
+  ledger validation, and privilege boundaries verified.
+- Metrics and Admin CRM are not anonymously accessible.
+- PostgreSQL, Redis, object storage, Prometheus, and Grafana are private-network
+  only.
+- Secrets are injected at runtime, independently rotated, and absent from Git,
+  images, logs, test fixtures, and support exports.
+- Replay signatures, generator/puzzle hashes, rules versions, and retained
+  verification keys pass reconstruction.
+- Containers run as non-root, immutable images; host and dependency security
+  updates are current.
+- Backups are encrypted, access controlled, separately retained, and regularly
+  restored.
+
+###### Penetration Test Preparation
+
+Provide the independent tester with an isolated production-equivalent
+environment, test accounts for player and each privileged role, API and game
+protocol documentation, permitted source IPs, financial-provider sandbox
+accounts, WebSocket endpoints, rate-limit policy, replay format, and explicit
+rules of engagement. Required coverage includes authentication/session theft,
+MFA bypass, authorization/IDOR, CSRF/CORS, injection, SSRF, object access,
+financial idempotency, webhook forgery, privilege escalation, WebSocket
+sequencing, replay tampering, rate-limit bypass, secret exposure, and
+denial-of-service boundaries. No critical or high finding may remain open at
+Sprint 6 freeze.
+
+###### Canonical API And Replay Documentation
+
+The API reference, authentication flow, game protocol, database model, payment
+flow, and deterministic replay format remain canonical sections of this README.
+RC1 does not create duplicate Markdown documents. Any material contract change
+must update the relevant README section and pass frozen-sprint regression gates.
+
+###### RC1 Known Risks And Outstanding Work
+
+- Development/reference-runner action and reconnect latency exceed release
+  targets; production-equivalent validation is mandatory.
+- Production alert delivery depends on the selected Alertmanager or hosted
+  monitoring receiver and must be tested end to end.
+- The two-hour soak, rolling restart with live reconnect traffic,
+  multi-instance recovery, and independent penetration test have frameworks but
+  no production evidence yet.
+- Production SMTP, payment-provider, object-storage, DNS, TLS, monitoring, and
+  secret-manager credentials remain deployment configuration.
+- RC1 must not be promoted directly to public production.
+
 ##### Remaining Freeze Gates
 
 **High**
