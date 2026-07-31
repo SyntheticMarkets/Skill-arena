@@ -1,0 +1,109 @@
+name: Sprint 6 Durable Group Commit Experiment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: Baseline versus durable group commit
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: skillarena
+          POSTGRES_PASSWORD: phase9-postgres-ci
+        ports:
+          - 55433:5432
+        options: >-
+          --health-cmd "pg_isready -U skillarena -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 56379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Configure diagnostic PostgreSQL
+        run: |
+          postgres_id="$(docker ps --filter ancestor=postgres:17-alpine --format '{{.ID}}' | head -n 1)"
+          test -n "$postgres_id"
+          docker exec "$postgres_id" psql -U skillarena -d postgres \
+            -c "ALTER SYSTEM SET max_connections = 150" \
+            -c "ALTER SYSTEM SET track_io_timing = on" \
+            -c "ALTER SYSTEM SET track_wal_io_timing = on"
+          docker restart "$postgres_id"
+          for attempt in $(seq 1 30); do
+            if PGPASSWORD=phase9-postgres-ci pg_isready \
+              -h 127.0.0.1 -p 55433 -U skillarena -d postgres; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      - name: Start private S3-compatible storage
+        run: |
+          docker run -d --name phase9-minio \
+            -p 59000:9000 \
+            -e MINIO_ROOT_USER=phase9minio \
+            -e MINIO_ROOT_PASSWORD=phase9-minio-ci-secret \
+            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          for attempt in $(seq 1 30); do
+            curl --fail --silent http://127.0.0.1:59000/minio/health/live >/dev/null && break
+            sleep 1
+          done
+          curl --fail --location --silent --show-error \
+            https://dl.min.io/client/mc/release/linux-amd64/archive/mc.RELEASE.2025-04-16T18-13-26Z \
+            --output /tmp/mc
+          echo "ac90da87a35641be5a0ac75d49de5161ddb47d629b5ba01261b0ae9e00aea15f  /tmp/mc" \
+            | sha256sum --check
+          chmod +x /tmp/mc
+          /tmp/mc alias set phase9 http://127.0.0.1:59000 phase9minio phase9-minio-ci-secret
+          /tmp/mc mb phase9/skill-arena-phase9
+          /tmp/mc anonymous set none phase9/skill-arena-phase9
+      - name: Run controlled durability profiles
+        working-directory: backend
+        env:
+          PGPASSWORD: phase9-postgres-ci
+          SKILL_ARENA_PHASE9_LOAD_REDIS_URL: redis://127.0.0.1:56379/0
+          SKILL_ARENA_PHASE9_LOAD_S3_ENDPOINT: http://127.0.0.1:59000
+          SKILL_ARENA_PHASE9_LOAD_S3_BUCKET: skill-arena-phase9
+          SKILL_ARENA_PHASE9_LOAD_S3_ACCESS_KEY: phase9minio
+          SKILL_ARENA_PHASE9_LOAD_S3_SECRET_KEY: phase9-minio-ci-secret
+          SKILL_ARENA_PHASE9_REPORT_LATENCY_ONLY: "true"
+        run: |
+          for profile in baseline delay900 delay1800; do
+            database="skillarena_${profile}"
+            createdb -h 127.0.0.1 -p 55433 -U skillarena "$database"
+            if [ "$profile" = "delay900" ]; then
+              psql -h 127.0.0.1 -p 55433 -U skillarena -d postgres \
+                -c "ALTER DATABASE $database SET commit_delay = 900" \
+                -c "ALTER DATABASE $database SET commit_siblings = 5"
+            elif [ "$profile" = "delay1800" ]; then
+              psql -h 127.0.0.1 -p 55433 -U skillarena -d postgres \
+                -c "ALTER DATABASE $database SET commit_delay = 1800" \
+                -c "ALTER DATABASE $database SET commit_siblings = 5"
+            fi
+            echo "===== DURABILITY PROFILE: $profile ====="
+            export SKILL_ARENA_PHASE9_LOAD_POSTGRES_URL="postgresql://skillarena:phase9-postgres-ci@127.0.0.1:55433/$database?sslmode=disable"
+            go test ./internal/realtime \
+              -run TestPhase9OneHundredLiveMazeMatches -count=1 -v -timeout 25m
+          done
+      - name: Stop object storage
+        if: ${{ always() }}
+        run: docker rm -f phase9-minio || true

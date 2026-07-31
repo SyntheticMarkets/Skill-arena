@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -333,11 +334,20 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 	if prepP99 > 5*time.Second {
 		t.Fatalf("match preparation p99 %s exceeds 5s", prepP99)
 	}
+	reportOnly := strings.EqualFold(
+		os.Getenv("SKILL_ARENA_PHASE9_REPORT_LATENCY_ONLY"), "true",
+	)
 	if actionP95 > 50*time.Millisecond || actionP99 > 100*time.Millisecond {
-		t.Fatalf("action latency p95=%s p99=%s exceeds target", actionP95, actionP99)
+		if !reportOnly {
+			t.Fatalf("action latency p95=%s p99=%s exceeds target", actionP95, actionP99)
+		}
+		t.Logf("REPORT ONLY: action latency p95=%s p99=%s exceeds target", actionP95, actionP99)
 	}
 	if reconnectP95 > 250*time.Millisecond {
-		t.Fatalf("reconnect p95 %s exceeds 250ms", reconnectP95)
+		if !reportOnly {
+			t.Fatalf("reconnect p95 %s exceeds 250ms", reconnectP95)
+		}
+		t.Logf("REPORT ONLY: reconnect p95 %s exceeds 250ms", reconnectP95)
 	}
 }
 

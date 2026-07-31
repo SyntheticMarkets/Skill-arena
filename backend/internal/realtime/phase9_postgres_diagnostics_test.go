@@ -90,23 +90,26 @@ func startPhase9PostgresDiagnostics(
 
 func (d *phase9PostgresDiagnostics) loadSettings(ctx context.Context) (string, error) {
 	var version, synchronousCommit, walSyncMethod string
-	var fullPageWrites, trackIO, trackWALIO string
+	var fullPageWrites, trackIO, trackWALIO, commitDelay, commitSiblings string
 	err := d.db.QueryRowContext(ctx, `SELECT
 current_setting('server_version'),
 current_setting('synchronous_commit'),
 current_setting('wal_sync_method'),
 current_setting('full_page_writes'),
 current_setting('track_io_timing'),
-current_setting('track_wal_io_timing')`).Scan(
+current_setting('track_wal_io_timing'),
+current_setting('commit_delay'),
+current_setting('commit_siblings')`).Scan(
 		&version, &synchronousCommit, &walSyncMethod, &fullPageWrites,
-		&trackIO, &trackWALIO,
+		&trackIO, &trackWALIO, &commitDelay, &commitSiblings,
 	)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf(
-		"pg_settings version=%s synchronous_commit=%s wal_sync_method=%s full_page_writes=%s track_io_timing=%s track_wal_io_timing=%s",
-		version, synchronousCommit, walSyncMethod, fullPageWrites, trackIO, trackWALIO,
+		"pg_settings version=%s synchronous_commit=%s wal_sync_method=%s full_page_writes=%s track_io_timing=%s track_wal_io_timing=%s commit_delay=%s commit_siblings=%s",
+		version, synchronousCommit, walSyncMethod, fullPageWrites, trackIO,
+		trackWALIO, commitDelay, commitSiblings,
 	), nil
 }
 
