@@ -59,7 +59,7 @@ Do not create frontend placeholders that depend on unfinished backend work. Do n
 
 ### Release 1.0 Architecture
 
-Status: **Sprints 1-5 complete and frozen. Sprint 6 Implementation Phases 1 through 8 are complete and validated; Phase 9 is in progress with changes required.**
+Status: **Sprints 1-5 complete and frozen. Sprint 6 implementation is complete and published as RC1. Production Qualification is in progress; the Sprint 6 freeze is withheld pending successful completion of every qualification gate.**
 
 Release 1.0 is organized as independently owned product domains. A frozen domain may receive bug fixes, security fixes, performance work, scalability work, or integration support, but its business contract may not be silently redesigned by a later sprint.
 
@@ -7817,13 +7817,16 @@ Sprint 6 Implementation Phase 7 validation decision is **APPROVED**.
 
 Sprint 6 Implementation Phase 8 validation decision is **APPROVED**.
 
-Sprint 6 Implementation Phase 9 is **IN PROGRESS - CHANGES REQUIRED**.
+Sprint 6 Implementation Phase 9 software implementation is **COMPLETE**.
+Production Qualification is **IN PROGRESS**.
 
 #### Sprint 6 Implementation Phase 9 Validation Report
 
 Validation date: 2026-07-30
 
-Decision: **CHANGES REQUIRED**
+Historical decision at validation date: **CHANGES REQUIRED**. This decision is
+superseded by the RC1 status below: implementation is complete and Production
+Qualification is in progress.
 
 Phase 9 remains production hardening only. No new gameplay rule, product
 feature, client authority, payment behavior, or frozen Sprint 1 through Sprint
@@ -8418,7 +8421,7 @@ No Sprint 6 freeze tag was created.
 
 ##### Sprint 6 Release Candidate RC1
 
-Status: **SOFTWARE ARCHITECTURE FROZEN - PRODUCTION VALIDATION REQUIRED**
+Status: **IMPLEMENTATION COMPLETE - PRODUCTION QUALIFICATION IN PROGRESS**
 
 RC1 is feature complete for Sprint 6. No new product feature, persistence
 redesign, replay redesign, realtime redesign, or development-machine latency
@@ -8450,10 +8453,12 @@ all production-only gates below pass.
   SBOM- and provenance-enabled backend, Player Platform, and Admin CRM images to
   GitHub Container Registry for an RC tag.
 - RC1 operations validation passed on Linux with Docker:
-  `https://github.com/SyntheticMarkets/Skill-arena/actions/runs/30619153115`.
+  `https://github.com/SyntheticMarkets/Skill-arena/actions/runs/30620316178`.
   The run verified backend monitoring tests, Prometheus configuration and alert
   rules, Grafana dashboard JSON, operations scripts with ShellCheck, and the
   production Compose model.
+- RC1 release regression and image publication passed:
+  `https://github.com/SyntheticMarkets/Skill-arena/actions/runs/30620316130`.
 - RC1 local regression passed on 2026-07-31: full Go tests, vet, build, and
   module verification; Player Platform lint, TypeScript, 22 unit tests,
   production build, dependency audit, and 27 Playwright passes with four
@@ -8464,7 +8469,7 @@ all production-only gates below pass.
   separately designed and approved; no unvalidated Kubernetes manifests are
   shipped.
 
-###### Production Validation Checklist
+###### Production Qualification Checklist
 
 The following checks require Ubuntu 24.04 LTS or equivalent production hardware
 with 4-8 dedicated vCPUs, 16-32 GB RAM, NVMe-class durable storage, PostgreSQL
@@ -8790,14 +8795,15 @@ must update the relevant README section and pass frozen-sprint regression gates.
   backward compatible.
 - Frozen Sprint 1 through Sprint 5 regression suites remain green.
 
-##### Freeze Recommendation
+##### Production Qualification Status
 
-**DO NOT FREEZE SPRINT 6.**
+**SPRINT 6 IMPLEMENTATION IS COMPLETE. THE SPRINT FREEZE IS WITHHELD.**
 
-Phase 9 implementation is functioning, but the documented freeze rules prohibit
-approval while high-severity performance, soak, observability, and security
-evidence remains outstanding. Do not create the Sprint 6 freeze tag until every
-high gate above is closed and the final validation workflow passes.
+Production Qualification remains in progress because performance, soak,
+observability, recovery, and independent security evidence must still be
+collected on production-equivalent infrastructure. Do not create the Sprint 6
+freeze tag until every qualification gate above is closed and the final
+production regression workflow passes.
 
 ### Sprint 7: Tournaments, Leaderboards, Seasons, And Rewards
 
