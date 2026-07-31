@@ -8315,6 +8315,48 @@ behavior must remain unchanged.
 
 No Sprint 6 freeze tag was created.
 
+###### Repository Durable Batching Experiment B
+
+Experiment date: 2026-07-31
+
+Decision: **IMPLEMENTATION REJECTED - CHANGES REQUIRED**
+
+Workflow:
+`https://github.com/SyntheticMarkets/Skill-arena/actions/runs/30598890282`
+
+The unchanged 100-match workload ran three times on one Linux runner against
+fresh databases. Every profile retained `synchronous_commit=on`,
+`full_page_writes=on`, atomic per-action SQL, ordered events, replay
+verification, idempotency, and fail-closed acknowledgement. Report-only mode
+suppressed only the known latency assertions; correctness or integrity failures
+still failed the workflow.
+
+| Profile | Action P95 | Action P99 | Reconnect P95 | Persist P95 | WAL syncs | WAL sync time |
+|---|---:|---:|---:|---:|---:|---:|
+| Direct transaction baseline | `337.968 ms` | `705.456 ms` | `423.343 ms` | `216.863 ms` | `2,198` | `4,284.931 ms` |
+| Two batch workers | `366.584 ms` | `885.598 ms` | `267.634 ms` | `345.013 ms` | `1,523` | `1,522.125 ms` |
+| Four batch workers | `283.694 ms` | `564.081 ms` | `368.366 ms` | `270.995 ms` | `1,711` | `1,487.161 ms` |
+
+Two workers reduced WAL synchronizations but regressed action P95 by
+approximately 8.5 percent and P99 by approximately 25.5 percent. Four workers
+improved action P95 by approximately 16.1 percent and P99 by approximately 20.0
+percent, but still missed the `50 ms` and `100 ms` release gates by substantial
+margins and increased persistence P95 relative to the direct baseline.
+Reconnect results were variable and no profile met its `250 ms` gate.
+
+The design also grouped independent matches inside one database transaction.
+Although that preserved atomic visibility and crash consistency, a statement or
+commit failure would make otherwise independent actions share the same failure
+outcome. That violates the approved no-cross-match-coupling invariant. The
+disabled experiment was therefore reverted after measurement; no batching
+configuration or runtime implementation was adopted.
+
+The result narrows the remaining investigation: reducing commit count alone is
+not sufficient on the reference workload. Further remediation must preserve
+per-match failure isolation while measuring the full acknowledgement path.
+
+No Sprint 6 freeze tag was created.
+
 ##### Remaining Freeze Gates
 
 **High**
