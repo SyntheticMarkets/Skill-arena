@@ -2,6 +2,7 @@ package realtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"sort"
@@ -242,6 +243,14 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 						errs <- errors.New("canonical action was rejected")
 						return
 					}
+					serializationStarted := time.Now()
+					if _, marshalErr := json.Marshal(result); marshalErr != nil {
+						errs <- marshalErr
+						return
+					}
+					timings.ObserveTiming(
+						"acknowledgement.json_encode", time.Since(serializationStarted),
+					)
 					latencyMu.Lock()
 					actionLatencies = append(actionLatencies, elapsed)
 					if result.Completion == nil {
@@ -306,6 +315,39 @@ func TestPhase9OneHundredLiveMazeMatches(t *testing.T) {
 			name, timings.count(name), timings.quantile(name, 50),
 			timings.quantile(name, 95), timings.quantile(name, 99),
 		)
+	}
+	requiredActionTimings := []string{
+		"acknowledgement.json_encode",
+		"db.game_action_commit.acquire",
+		"db.game_action_commit.event_build",
+		"db.game_action_commit.execute",
+		"db.game_action_commit.result",
+		"db.game_action_commit.statement_build",
+		"db.game_action_commit.total",
+		"game_action.apply",
+		"game_action.commit",
+		"game_action.compute",
+		"game_action.decode_state",
+		"game_action.load",
+		"game_action.post_commit",
+		"game_action.prepare_commit",
+		"game_action.publish_cache",
+		"game_action.request_validation",
+		"game_action.resolve",
+		"game_action.serialize_state",
+		"game_action.snapshot",
+		"game_action.total",
+		"game_action.validate",
+		"realtime.game_action.submit",
+		"realtime.game_action.total",
+	}
+	for _, name := range requiredActionTimings {
+		if got := timings.count(name); got != len(actionLatencies) {
+			t.Fatalf(
+				"timing coverage %s count=%d actions=%d",
+				name, got, len(actionLatencies),
+			)
+		}
 	}
 	if stats, ok := store.DatabaseStats(); ok {
 		t.Logf(

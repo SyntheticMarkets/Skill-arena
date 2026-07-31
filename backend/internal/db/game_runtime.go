@@ -428,6 +428,9 @@ func (s *Store) commitGameActionPostgres(
 	expectedStreamHash string,
 	drafts []models.GameEventDraft,
 ) (*models.GameActionReceipt, []models.RealtimeEvent, error) {
+	totalStarted := time.Now()
+	defer observability.ObserveTiming(ctx, "db.game_action_commit.total", totalStarted)
+
 	started := time.Now()
 	conn, err := s.pg.Conn(ctx)
 	observability.ObserveTiming(ctx, "db.game_action_commit.acquire", started)
@@ -435,6 +438,8 @@ func (s *Store) commitGameActionPostgres(
 		return nil, nil, err
 	}
 	defer conn.Close()
+
+	started = time.Now()
 	sequence := expectedStreamSequence
 	previous := expectedStreamHash
 	events := make([]models.RealtimeEvent, 0, len(drafts))
@@ -450,11 +455,17 @@ func (s *Store) commitGameActionPostgres(
 	next.LastServerSequence = events[len(events)-1].Sequence
 	receipt.FirstEventSequence = events[0].Sequence
 	receipt.LastEventSequence = events[len(events)-1].Sequence
+	observability.ObserveTiming(ctx, "db.game_action_commit.event_build", started)
+
 	started = time.Now()
 	query, args := gameActionPersistenceStatement(
 		events, expectedStreamSequence, sequence, expected, next, receipt,
 	)
+	observability.ObserveTiming(ctx, "db.game_action_commit.statement_build", started)
+
+	started = time.Now()
 	result, err := conn.ExecContext(ctx, query, args...)
+	observability.ObserveTiming(ctx, "db.game_action_commit.execute", started)
 	observability.ObserveTiming(ctx, "db.game_action_commit.persist", started)
 	if err != nil {
 		if isPostgresUniqueViolation(err) {
@@ -462,7 +473,9 @@ func (s *Store) commitGameActionPostgres(
 		}
 		return nil, nil, err
 	}
+	started = time.Now()
 	affected, _ := result.RowsAffected()
+	observability.ObserveTiming(ctx, "db.game_action_commit.result", started)
 	if affected != 1 {
 		return nil, nil, ErrRealtimeConflict
 	}

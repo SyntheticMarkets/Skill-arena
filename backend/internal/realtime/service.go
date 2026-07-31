@@ -302,10 +302,15 @@ func (s *Service) GameAction(
 	envelope interfaces.ActionEnvelope,
 	latency time.Duration,
 ) (gamesession.ActionResult, error) {
+	totalStarted := time.Now()
+	defer observability.ObserveTiming(ctx, "realtime.game_action.total", totalStarted)
+
 	if s.games == nil {
 		return gamesession.ActionResult{}, gamesession.ErrRuntimeUnavailable
 	}
+	stageStarted := time.Now()
 	result, err := s.games.SubmitAction(ctx, matchID, userID, envelope, latency)
+	observability.ObserveTiming(ctx, "realtime.game_action.submit", stageStarted)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return gamesession.ActionResult{}, ErrNotParticipant
@@ -314,6 +319,7 @@ func (s *Service) GameAction(
 	}
 	if result.Outcome != nil && result.Outcome.Status == "complete" &&
 		result.Match != nil && !terminal(result.Match.Status) {
+		stageStarted = time.Now()
 		match, loadErr := s.store.GetRealtimeMatch(ctx, matchID)
 		if loadErr != nil {
 			return gamesession.ActionResult{}, loadErr
@@ -333,6 +339,7 @@ func (s *Service) GameAction(
 				return gamesession.ActionResult{}, err
 			}
 		}
+		observability.ObserveTiming(ctx, "realtime.game_action.completion", stageStarted)
 	}
 	return result, nil
 }

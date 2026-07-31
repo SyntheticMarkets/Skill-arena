@@ -190,6 +190,10 @@ func (s *Service) SubmitAction(
 	envelope interfaces.ActionEnvelope,
 	latency time.Duration,
 ) (ActionResult, error) {
+	totalStarted := time.Now()
+	defer observability.ObserveTiming(ctx, "game_action.total", totalStarted)
+
+	stageStarted := time.Now()
 	if envelope.MatchID != matchID || strings.TrimSpace(userID) == "" {
 		return ActionResult{}, ErrActionConflict
 	}
@@ -198,7 +202,9 @@ func (s *Service) SubmitAction(
 		userID, envelope.Kind, string(envelope.Payload),
 		fmt.Sprint(envelope.ClientSequence), fmt.Sprint(envelope.ExpectedStateVersion),
 	)
-	stageStarted := time.Now()
+	observability.ObserveTiming(ctx, "game_action.request_validation", stageStarted)
+
+	stageStarted = time.Now()
 	actionContext, err := s.gameActionContext(ctx, matchID, userID, envelope)
 	observability.ObserveTiming(ctx, "game_action.load", stageStarted)
 	if err != nil {
@@ -220,15 +226,21 @@ func (s *Service) SubmitAction(
 	if envelope.ExpectedStateVersion != record.StateVersion {
 		return ActionResult{}, ErrActionConflict
 	}
+	stageStarted = time.Now()
 	runtime, descriptor, err := s.resolve(match)
 	if err != nil {
 		return ActionResult{}, err
 	}
+	observability.ObserveTiming(ctx, "game_action.resolve", stageStarted)
+
 	var current interfaces.GameState
+	computeStarted := time.Now()
 	stageStarted = time.Now()
 	if err := json.Unmarshal(record.State, &current); err != nil {
 		return ActionResult{}, err
 	}
+	observability.ObserveTiming(ctx, "game_action.decode_state", stageStarted)
+
 	receivedAt := s.now().UTC()
 	runtimeActionContext := interfaces.ActionContext{
 		MatchID: match.ID, ParticipantID: userID, UserID: userID,
@@ -236,14 +248,21 @@ func (s *Service) SubmitAction(
 		CurrentSequence:     envelope.ClientSequence,
 		CurrentStateVersion: record.StateVersion,
 	}
+	stageStarted = time.Now()
 	validated, err := runtime.ValidateAction(ctx, runtimeActionContext, current, envelope)
 	if err != nil {
 		return ActionResult{}, err
 	}
+	observability.ObserveTiming(ctx, "game_action.validate", stageStarted)
+
+	stageStarted = time.Now()
 	transition, err := runtime.ApplyAction(ctx, runtimeActionContext, current, validated)
 	if err != nil {
 		return ActionResult{}, err
 	}
+	observability.ObserveTiming(ctx, "game_action.apply", stageStarted)
+
+	stageStarted = time.Now()
 	transitionBytes, err := json.Marshal(transition)
 	if err != nil {
 		return ActionResult{}, err
@@ -252,6 +271,9 @@ func (s *Service) SubmitAction(
 	if err != nil {
 		return ActionResult{}, err
 	}
+	observability.ObserveTiming(ctx, "game_action.serialize_state", stageStarted)
+
+	stageStarted = time.Now()
 	status := "active"
 	if transition.Completion != nil {
 		switch transition.Completion.Status {
@@ -289,7 +311,8 @@ func (s *Service) SubmitAction(
 		fmt.Sprint(receipt.StateVersionBefore), fmt.Sprint(receipt.StateVersionAfter),
 		string(receipt.Transition), receipt.ServerReceivedAt.Format(time.RFC3339Nano),
 	)
-	observability.ObserveTiming(ctx, "game_action.compute", stageStarted)
+	observability.ObserveTiming(ctx, "game_action.prepare_commit", stageStarted)
+	observability.ObserveTiming(ctx, "game_action.compute", computeStarted)
 	stageStarted = time.Now()
 	var committed *models.GameActionReceipt
 	var events []models.RealtimeEvent
@@ -331,8 +354,10 @@ func (s *Service) SubmitAction(
 	if err != nil {
 		return ActionResult{}, err
 	}
+	postCommitStarted := time.Now()
 	match.Sequence = events[len(events)-1].Sequence
 	match.UpdatedAt = next.UpdatedAt
+	stageStarted = time.Now()
 	s.rememberStream(
 		db.GameActionContext{
 			Match: *match, StreamSequence: match.Sequence,
@@ -347,6 +372,8 @@ func (s *Service) SubmitAction(
 			StreamHash:     events[len(events)-1].IntegrityHash,
 		},
 	)
+	observability.ObserveTiming(ctx, "game_action.publish_cache", stageStarted)
+
 	stageStarted = time.Now()
 	snapshot, err := runtime.Snapshot(ctx, interfaces.ViewerContext{
 		MatchID: match.ID, UserID: userID, ParticipantID: userID, Role: "player",
@@ -354,11 +381,14 @@ func (s *Service) SubmitAction(
 	if err != nil {
 		return ActionResult{}, err
 	}
+	observability.ObserveTiming(ctx, "game_action.snapshot", stageStarted)
+
 	result := ActionResult{
 		Receipt: *committed, Snapshot: snapshot, Events: events,
 		Completion: transition.Completion, Match: match,
 	}
 	if transition.Completion != nil {
+		stageStarted = time.Now()
 		for _, participant := range match.Participants {
 			s.actionCache.Delete(gameActionCacheKey(matchID, participant.UserID))
 		}
@@ -367,8 +397,9 @@ func (s *Service) SubmitAction(
 			return ActionResult{}, outcomeErr
 		}
 		result.Outcome = &outcome
+		observability.ObserveTiming(ctx, "game_action.completion", stageStarted)
 	}
-	observability.ObserveTiming(ctx, "game_action.post_commit", stageStarted)
+	observability.ObserveTiming(ctx, "game_action.post_commit", postCommitStarted)
 	return result, nil
 }
 
