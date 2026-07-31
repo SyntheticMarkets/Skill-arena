@@ -8278,6 +8278,43 @@ Full backend, Player Platform, Admin CRM, deterministic-vector, corpus, native
 race, live infrastructure, and production-image validations passed. Only the
 documented latency gate failed. No Sprint 6 freeze tag was created.
 
+###### Durable Group Commit Experiment A
+
+Experiment date: 2026-07-31
+
+Decision: **CONFIGURATION INSUFFICIENT - CHANGES REQUIRED**
+
+Workflow:
+`https://github.com/SyntheticMarkets/Skill-arena/actions/runs/30593843686`
+
+The unchanged 100-match workload ran three times on one Linux runner against
+fresh databases. Every profile retained `synchronous_commit=on`,
+`full_page_writes=on`, atomic receipts, ordered events, replay verification,
+idempotency, and fail-closed acknowledgement. Report-only mode suppressed only
+the known latency assertions; any correctness or integrity failure still failed
+the workflow.
+
+| Profile | Action P95 | Action P99 | Reconnect P95 | WAL syncs | WAL sync time |
+|---|---:|---:|---:|---:|---:|
+| Baseline (`commit_delay=0`) | `303.337 ms` | `684.449 ms` | `389.393 ms` | `2,361` | `4,347.431 ms` |
+| `commit_delay=900 us` | `300.145 ms` | `666.297 ms` | `344.296 ms` | `1,678` | `1,887.344 ms` |
+| `commit_delay=1800 us` | `379.214 ms` | `715.817 ms` | `624.821 ms` | `1,763` | `1,749.180 ms` |
+
+The `900 us` profile reduced WAL sync count by approximately 28.9 percent and
+WAL sync time by approximately 56.6 percent, but improved action P95 by only
+about 1.1 percent and action P99 by about 2.7 percent. The `1800 us` profile
+regressed every release latency. PostgreSQL durable group-commit configuration
+alone therefore cannot close the documented gates, and neither tested setting
+is approved as a production default.
+
+Experiment B may evaluate repository-level durable batching, but it must prove
+that independent action acknowledgements remain synchronously durable and that
+batch failure cannot produce partial receipts, reordered events, replay
+divergence, cross-match coupling, or ambiguous retries. Public APIs and gameplay
+behavior must remain unchanged.
+
+No Sprint 6 freeze tag was created.
+
 ##### Remaining Freeze Gates
 
 **High**
